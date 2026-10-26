@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "depush",
+  "main": "./src/index.ts",
+  "compatibility_date": "2026-10-26",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "APP_CHANNEL", "class_name": "AppChannel" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AppChannel"] }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "depush",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ]
+}
