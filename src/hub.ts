@@ -264,6 +264,7 @@ export class AppHub extends DurableObject<AppBindings> {
   }
 
   override webSocketError(socket: WebSocket): void {
+    this.log.warn('socket_error', { socketId: readSocketState(socket)?.socketId })
     socket.close(1011, 'WebSocket error')
   }
 
