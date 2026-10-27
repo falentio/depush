@@ -28,6 +28,29 @@ Units:
 
 No remote, no PRs. Landing is a coordinator fast-forward of `unit/<id>` into local `main`; the ledger keys by commit SHA.
 
-## Close
+## v0.2 — cache, history, presence info
+
+The first extension adds durable per-channel features without moving the live socket path:
+
+- A dedicated `Channel` Durable Object per app and channel (`idFromName(`${appId}:${channel}`)`)
+  owns SQLite cache and history. `AppHub` remains the single owner of live WebSockets and presence.
+- Cache channels (`cache-`, `private-cache-`, `presence-cache-`) replay the last server-published
+  event as a normal event after subscription success; a miss sends `pusher:cache_miss`; TTL is at
+  most 30 minutes. Client events are not cached.
+- A signed per-channel history API keeps 24 hours and 1000 events per channel.
+- A signed presence-info API returns the full live `{ids, hash, count}` state; the Pusher `/users`
+  route is unchanged.
+- A `v2` migration adds the `Channel` SQLite class. The cache/history routes are depush extensions.
+
+Units:
+
+| id                  | track  | state   | outcome                                                              |
+| ------------------- | ------ | ------- | -------------------------------------------------------------------- |
+| u6-cache            | server | ready   | per-channel Channel DO, cache replay/miss, cache info, TTL           |
+| u7-history-presence | server | pending | per-channel history API and live presence-info API on the same DO    |
+
+Final verification will grow the compat harness to 40 checks and tag `v0.2.0`. No remote, no PRs.
+
+## Close (v0.1.0)
 
 All five units landed on local `main`. Final verification at `d9a3dbe`: `pnpm check` 37 files, `pnpm typecheck`, `pnpm test` 93/93, `pnpm build`, `pnpm exec wrangler deploy --dry-run`, and `pnpm compat` 28/28 with official `pusher-js` 8.6 and `pusher` 5.3. Tag `v0.1.0` marks the landed state. No remote and no PRs.
