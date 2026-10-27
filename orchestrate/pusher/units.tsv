@@ -2,5 +2,5 @@ id	track	state	branch	pr	sha	brief
 u1-core	server	landed			a4706ac2596609fbd37f1b505ccde7eecc9a7f05	briefs/u1-core.md
 u2-private-presence	server	landed			6f4e6adcf1de5fb7f717fcc8291131e5a41b9514	briefs/u2-private-presence.md
 u3-client-rest	server	landed			f5b89a305bbdbacc576a55f19d30832e95e766d1	briefs/u3-client-rest.md
-u4-selfhost	docs	ready				briefs/u4-selfhost.md
+u4-selfhost	docs	landed			873bc0c79a8020651b7ec3b2984df190470d9460	briefs/u4-selfhost.md
 u5-harden	server	pending				briefs/u5-harden.md
