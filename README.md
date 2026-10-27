@@ -4,8 +4,9 @@
 
 Track deployments for each app, with a live deployment feed per app.
 
-The API runs on Cloudflare Workers with Hono for routing, Valibot for validation, D1 for
-history, and one SQLite-backed Durable Object per app for live state and WebSockets.
+The API runs on Cloudflare Workers with Hono for routing, Drizzle over D1 for storage and
+migrations, Valibot for validation, and one SQLite-backed Durable Object per app for live
+state and WebSockets.
 
 ## Quickstart
 
@@ -69,18 +70,23 @@ request
             │   ├── apps                      createApp, listApps, requireApp
             │   └── deployments               createDeployment, listDeployments,
             │                                 transitionDeployment
+            ├── db                            src/db
+            │   ├── schema.ts                 tables, CHECK, index
+            │   └── client.ts                 drizzle(D1) -> Database
             └── live channel                  src/durable/app-channel.ts
                 ├── publish                   sequence + latest, broadcast
                 └── snapshot                  current live state
 ```
 
-Every database row is parsed with Valibot before it becomes a domain value. SQL aliases
-translate snake_case columns to the camelCase HTTP fields, so no row shape is cast.
+The Drizzle schema in `src/db/schema.ts` maps snake_case columns to camelCase fields. Every
+database row is parsed with Valibot before it becomes a domain value, so no row shape is
+cast.
 
 ## Data model
 
 `apps` stores one row per app. `deployments` stores the history and references `apps` with
-`ON DELETE CASCADE`. The index `deployments_by_app(app_id, created_at DESC, id DESC)`
+`ON DELETE CASCADE`. Both tables live in `src/db/schema.ts`; `drizzle-kit` generates
+`drizzle/0000_init.sql` from them, and Wrangler applies that SQL to D1. The index `deployments_by_app(app_id, created_at DESC, id DESC)`
 serves the newest-first list and the `(created_at, id)` cursor.
 
 A deployment has a closed status set and a fixed transition table:
@@ -104,6 +110,19 @@ row and does not insert a second one; reusing an id under a different app return
 
 Pagination uses an opaque cursor over `(created_at, id)`. `limit` defaults to 50 and accepts
 1 to 100. `nextCursor` is present only when another row exists.
+
+## Schema changes
+
+Change a table in `src/db/schema.ts`, then generate and apply a migration:
+
+```sh
+pnpm db:generate
+pnpm db:migrate:local
+```
+
+Commit the generated `drizzle/` directory, including `meta/`. Wrangler applies the SQL files
+in order and records them in `d1_migrations`. Run `pnpm db:migrate:remote` for the deployed
+database.
 
 ## HTTP API
 
