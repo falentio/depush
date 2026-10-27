@@ -539,7 +539,8 @@ the last 24 hours, up to 1000 events per channel.
 
 One `Registry` Durable Object per deployment, named `registry`, owns the app table, the settings
 row, and better-auth's `user`, `session`, `account`, and `verification` tables. It is the only
-writer for all of them, so the first sign-up can claim `role = 'admin'` without a race.
+writer for all of them, and it stamps the role on the user row in the same request that inserts the
+row, so two concurrent first sign-ups cannot both become admin.
 
 One `AppHub` Durable Object per app, named from the app's registry id, writes all sockets and
 channel membership. The WebSocket route and the HTTP publish and query routes reach the same object, so a

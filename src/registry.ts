@@ -12,8 +12,6 @@ export type NewAppRecord = AppRecord & { secret: string }
 
 export type Settings = { signup_enabled: boolean }
 
-export type SignUpDecision = { allowed: true; admin: boolean } | { allowed: false }
-
 type Row = Record<string, unknown>
 type ColumnValue = string | number | null
 
@@ -221,13 +219,13 @@ export class Registry extends DurableObject<Env> {
   }
 
   /**
-   * better-auth counts a sign-up before inserting the row, so the admin
-   * decision is made here. The DO runs one request at a time, which makes the
-   * count and the insert the same decision.
+   * better-auth asks before it inserts, so a refused sign-up answers 403 instead
+   * of failing inside the insert. Which role the new row gets is settled by the
+   * insert itself, not here.
    */
-  signUpDecision(): SignUpDecision {
-    if (this.userCount() === 0) return { allowed: true, admin: true }
-    return this.settings().signup_enabled ? { allowed: true, admin: false } : { allowed: false }
+  signUpAllowed(): boolean {
+    if (this.userCount() === 0) return true
+    return this.settings().signup_enabled
   }
 
   settings(): Settings {
@@ -306,13 +304,14 @@ export class Registry extends DurableObject<Env> {
     const table = this.tableFor(input.model)
     switch (input.kind) {
       case 'insert': {
-        const { columns, values } = toColumn(input.data)
+        const data = table === 'user' ? { ...input.data, role: this.claimedRole() } : input.data
+        const { columns, values } = toColumn(data)
         if (columns.length === 0) throw new Error(`Registry adapter got an empty ${table} row`)
         this.sql.exec(
           `INSERT INTO ${table} (${columns.map((column) => `"${column}"`).join(', ')}) VALUES (${placeholders(columns.length)})`,
           ...values,
         )
-        return this.selectOne(table, rowWhere(input.data))
+        return this.selectOne(table, rowWhere(data))
       }
       case 'update': {
         const { columns, values } = toColumn(input.update)
@@ -376,6 +375,14 @@ export class Registry extends DurableObject<Env> {
 
   private userCount(): number {
     return Number(this.sql.exec('SELECT COUNT(*) AS total FROM user').one().total)
+  }
+
+  /**
+   * The count and the insert that reads it run in one synchronous stretch of one
+   * DO request, so two concurrent first sign-ups cannot both find an empty table.
+   */
+  private claimedRole(): 'admin' | 'user' {
+    return this.userCount() === 0 ? 'admin' : 'user'
   }
 
   private appRow(condition: string, value: string): NewAppRecord | null {

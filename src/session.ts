@@ -33,12 +33,10 @@ export function createAuth(registry: RegistryStub, env: AppBindings, request: Re
     databaseHooks: {
       user: {
         create: {
-          before: async (user) => {
-            const decision = await registry.signUpDecision()
-            if (!decision.allowed) {
+          before: async () => {
+            if (!(await registry.signUpAllowed())) {
               throw new APIError('FORBIDDEN', { message: 'Sign-up is disabled' })
             }
-            return { data: { ...user, role: decision.admin ? 'admin' : 'user' } }
           },
         },
       },
