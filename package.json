@@ -22,7 +22,8 @@
     "format": "biome format --write .",
     "check": "biome check .",
     "verify:frontend": "node --experimental-strip-types scripts/verify-frontend.mjs",
-    "test:client": "vitest run --config vitest.client.config.ts"
+    "test:client": "vitest run --config vitest.client.config.ts",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@better-auth/core": "1.7.14",
