@@ -21,7 +21,7 @@
     "lint": "biome lint .",
     "format": "biome format --write .",
     "check": "biome check .",
-    "verify:frontend": "node scripts/verify-frontend.mjs",
+    "verify:frontend": "node --experimental-strip-types scripts/verify-frontend.mjs",
     "test:client": "vitest run --config vitest.client.config.ts"
   },
   "dependencies": {

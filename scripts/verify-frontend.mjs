@@ -3,6 +3,7 @@ import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { RUN_WORKER_FIRST } from '../web/src/app/worker-routes.ts'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const HOST = '127.0.0.1'
@@ -161,8 +162,7 @@ async function checkBuildOutput() {
     `generated assets.directory is ${generated.assets?.directory}`,
   )
   assert(
-    JSON.stringify(generated.assets?.run_worker_first) ===
-      JSON.stringify(['/api', '/api/*', '/apps/*', '/app/*', '/healthz']),
+    JSON.stringify(generated.assets?.run_worker_first) === JSON.stringify(RUN_WORKER_FIRST),
     'generated run_worker_first does not match the Worker route table',
   )
 }

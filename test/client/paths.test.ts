@@ -33,15 +33,12 @@ describe('client paths', () => {
     expect(() => assertRouteNamespace(['/elsewhere'])).toThrow(/outside the \/console namespace/)
   })
 
+  it.each(WORKER_PREFIXES)('routes %s through the Worker', (prefix) => {
+    expect(RUN_WORKER_FIRST.some((route) => route === prefix || route === `${prefix}/*`)).toBe(true)
+  })
+
   it('keeps wrangler run_worker_first in sync', () => {
     expect(wrangler.assets.run_worker_first).toEqual([...RUN_WORKER_FIRST])
-    expect(wrangler.assets.run_worker_first).toEqual([
-      '/api',
-      '/api/*',
-      '/apps/*',
-      '/app/*',
-      '/healthz',
-    ])
   })
 })
 
