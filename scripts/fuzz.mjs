@@ -934,7 +934,9 @@ function rawHttpCase(prng, iteration) {
     query: auth.pairs,
     body: body.raw,
     bodyLabel: body.label,
-    assertJson: path.startsWith('/apps') || path === '/healthz',
+    // Workers Assets owns the bare /apps path; the Worker owns /apps/:appId/...,
+    // which run_worker_first routes with the /apps/* glob.
+    assertJson: path.startsWith('/apps/') || path === '/healthz',
     describe: [
       `${method} ${truncate(url, 2_000)}`,
       `auth=${auth.label}`,
