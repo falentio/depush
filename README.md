@@ -407,8 +407,8 @@ Admin routes read a better-auth session cookie. The first account to sign up hol
 `role = 'admin'`; every later account gets `role = 'user'`. A request with no session gets 401, and
 a session whose user is not an admin gets 403.
 
-| Method | Path                 | Purpose                                                  |
-| ------ | -------------------- | -------------------------------------------------------- |
+| Method | Path                      | Purpose                                              |
+| ------ | ------------------------- | ---------------------------------------------------- |
 | POST   | `/api/auth/sign-up/email` | Create an account. Body: `email`, `password`, `name` |
 | POST   | `/api/auth/sign-in/email` | Sign in and receive the session cookie               |
 | POST   | `/api/auth/sign-out`      | Clear the session                                    |
@@ -416,7 +416,7 @@ a session whose user is not an admin gets 403.
 | GET    | `/api/settings`           | `{ "signup_enabled": boolean }`                      |
 | PATCH  | `/api/settings`           | Set `signup_enabled`                                 |
 | GET    | `/api/apps`               | List apps as `{ id, key, name, created_at }`         |
-| POST   | `/api/apps`               | Create an app from `{ "name": string }`, 201        |
+| POST   | `/api/apps`               | Create an app from `{ "name": string }`, 201         |
 | GET    | `/api/apps/:appId`        | Read one app, without its secret                     |
 | DELETE | `/api/apps/:appId`        | Delete an app, 204                                   |
 
@@ -491,18 +491,18 @@ channel.
 
 ## Errors
 
-| Where           | Code   | Meaning                                                                                                                                |
-| --------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| WebSocket close | `4001` | No app in the registry has that `:key`                                                                                                 |
-| WebSocket close | `4005` | The upgrade path is not a route                                                                                                        |
-| WebSocket close | `4007` | The `protocol` parameter is present but not `7`                                                                                        |
-| WebSocket close | `4008` | The `protocol` parameter is missing                                                                                                    |
-| WebSocket close | `4009` | Channel auth failed, or the channel is `private-encrypted-`                                                                            |
-| `pusher:error`  | `4300` | A bad frame, an invalid channel name, a text frame over 64 KiB, a client event on a channel you do not own, or data over 10 KB         |
-| `pusher:error`  | `4301` | More than 10 client events in one second                                                                                               |
-| HTTP            | `400`  | Invalid JSON, payload, event name, or channel name; publish `info`; unsupported `info`; or a plain HTTP request to `/app/:key`         |
+| Where           | Code   | Meaning                                                                                                                                  |
+| --------------- | ------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| WebSocket close | `4001` | No app in the registry has that `:key`                                                                                                   |
+| WebSocket close | `4005` | The upgrade path is not a route                                                                                                          |
+| WebSocket close | `4007` | The `protocol` parameter is present but not `7`                                                                                          |
+| WebSocket close | `4008` | The `protocol` parameter is missing                                                                                                      |
+| WebSocket close | `4009` | Channel auth failed, or the channel is `private-encrypted-`                                                                              |
+| `pusher:error`  | `4300` | A bad frame, an invalid channel name, a text frame over 64 KiB, a client event on a channel you do not own, or data over 10 KB           |
+| `pusher:error`  | `4301` | More than 10 client events in one second                                                                                                 |
+| HTTP            | `400`  | Invalid JSON, payload, event name, or channel name; publish `info`; unsupported `info`; or a plain HTTP request to `/app/:key`           |
 | HTTP            | `401`  | Unknown app id in the path, `auth_key`, `auth_version`, a timestamp that is not all digits or is outside 600 s, `body_md5`, or signature |
-| HTTP            | `413`  | Event data over 10,240 bytes, or a request body over 256 KiB                                                                           |
+| HTTP            | `413`  | Event data over 10,240 bytes, or a request body over 256 KiB                                                                             |
 
 A channel auth failure sends `pusher:error` 4009 and then closes the socket with 4009. The 4300
 and 4301 errors leave the connection open.
@@ -524,7 +524,7 @@ and 4301 errors leave the connection open.
 | History retention         | 24 hours per channel                            |
 | Events kept per channel   | 1000, oldest dropped first                      |
 | History page size         | 1 to 100, default 50                            |
-| Apps per deployment       | No fixed limit; each app is one registry row     |
+| Apps per deployment       | No fixed limit; each app is one registry row    |
 
 Presence state lives in the live sockets. The presence-info route reads that state, so it is
 gone when the last socket leaves and the Durable Object is evicted, and nothing replays it.
