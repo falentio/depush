@@ -7,12 +7,10 @@ import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import PusherServer from 'pusher'
 import Pusher from 'pusher-js'
+import { bootstrap, DEV_VARS_CONTENT } from './bootstrap.mjs'
 
 const HOST = '127.0.0.1'
 const DEFAULT_PORT = 8787
-const APP_ID = '1'
-const APP_KEY = 'test-key'
-const APP_SECRET = 'test-secret'
 const CHANNEL = 'public-smoke'
 const PRIVATE_CHANNEL = 'private-room'
 const PRESENCE_CHANNEL = 'presence-room'
@@ -24,14 +22,10 @@ const RUN_ID = Date.now().toString(36)
 const HISTORY_ROOM = `history-room-${RUN_ID}`
 const DEV_VARS = '.dev.vars'
 const DEV_VARS_BACKUP = '.dev.vars.compat-backup'
-const DEV_VARS_CONTENT = [
-  `PUSHER_APP_ID=${APP_ID}`,
-  `PUSHER_APP_KEY=${APP_KEY}`,
-  `PUSHER_APP_SECRET=${APP_SECRET}`,
-  'PUSHER_ACTIVITY_TIMEOUT=1',
-  'PUSHER_CACHE_TTL_SECONDS=2',
-  '',
-].join('\n')
+
+let APP_ID = ''
+let APP_KEY = ''
+let APP_SECRET = ''
 
 let serverLog = ''
 
@@ -53,7 +47,7 @@ function isPortFree(port) {
 
 function backupDevVars() {
   if (existsSync(DEV_VARS)) renameSync(DEV_VARS, DEV_VARS_BACKUP)
-  writeFileSync(DEV_VARS, DEV_VARS_CONTENT)
+  writeFileSync(DEV_VARS, DEV_VARS_CONTENT({ activityTimeout: 1, cacheTtl: 2 }))
 }
 
 function restoreDevVars() {
@@ -1170,6 +1164,12 @@ try {
   await waitForHealthz(baseUrl)
   console.log(`dev server on ${baseUrl}`)
   console.log(`auth server on ${authUrl}`)
+
+  const app = await bootstrap(baseUrl, 'compat')
+  APP_ID = app.appId
+  APP_KEY = app.key
+  APP_SECRET = app.secret
+  console.log(`bootstrap app ${APP_ID} created`)
 
   const clientA = createClient(port, authPort, 'alice')
   clients.push(clientA)

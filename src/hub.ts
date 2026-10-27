@@ -3,7 +3,7 @@ import * as v from 'valibot'
 import { verifyChannelAuth } from './auth'
 import type { Channel } from './channel'
 import type { AppConfig } from './config'
-import { readConfig } from './config'
+import { readSettings } from './config'
 import type { AppBindings } from './env'
 import type { ChannelSnapshot } from './events'
 import { dataBytes, MAX_DATA_BYTES } from './events'
@@ -99,12 +99,15 @@ const socketStateSchema = v.object({
 })
 
 export class AppHub extends DurableObject<AppBindings> {
-  private readonly config: AppConfig
+  private config: AppConfig | null = null
   private readonly clientLimiter = new ClientEventLimiter()
 
-  constructor(ctx: DurableObjectState, env: AppBindings) {
-    super(ctx, env)
-    this.config = readConfig(env)
+  /**
+   * Only the WebSocket upgrade needs the key and secret, so the Worker hands
+   * the resolved config in there. Publish and query calls never touch it.
+   */
+  init(config: AppConfig): void {
+    this.config = config
   }
 
   override async fetch(request: Request): Promise<Response> {
@@ -112,13 +115,16 @@ export class AppHub extends DurableObject<AppBindings> {
       return new Response('Expected WebSocket upgrade', { status: 426 })
     }
 
+    const config = this.config
+    if (config === null) return new Response('AppHub is not initialized', { status: 503 })
+
     const pair = new WebSocketPair()
     const server = pair[1]
     this.ctx.acceptWebSocket(server)
 
     const state: SocketState = { socketId: newSocketId(), subscriptions: [] }
     server.serializeAttachment(state)
-    server.send(connectionEstablished(state.socketId, this.config.activityTimeout))
+    server.send(connectionEstablished(state.socketId, config.activityTimeout))
 
     return new Response(null, { status: 101, webSocket: pair[0] })
   }
@@ -220,6 +226,11 @@ export class AppHub extends DurableObject<AppBindings> {
 
     let presence: PresenceMember | null = null
     if (kind !== 'public') {
+      const config = this.config
+      if (config === null) {
+        this.fail(socket, 'AppHub is not initialized', PUSHER_ERROR_AUTH_REQUIRED)
+        return
+      }
       const auth = await verifyChannelAuth(
         {
           channel: frame.channel,
@@ -227,7 +238,7 @@ export class AppHub extends DurableObject<AppBindings> {
           auth: frame.auth,
           channelData: frame.channelData,
         },
-        this.config,
+        config,
       )
       if (!auth.ok) {
         this.fail(socket, 'Invalid channel authorization', PUSHER_ERROR_AUTH_REQUIRED)
@@ -366,7 +377,9 @@ export class AppHub extends DurableObject<AppBindings> {
   }
 
   private channelState(channel: string): DurableObjectStub<Channel> {
-    return this.env.CHANNEL.get(this.env.CHANNEL.idFromName(`${this.config.appId}:${channel}`))
+    const appId = this.ctx.id.name
+    if (appId === undefined) throw new Error('AppHub is not addressed by app id')
+    return this.env.CHANNEL.get(this.env.CHANNEL.idFromName(`${appId}:${channel}`))
   }
 
   private async recordEvent(channel: string, input: RecordedEvent): Promise<void> {
@@ -375,7 +388,7 @@ export class AppHub extends DurableObject<AppBindings> {
       data: input.data,
       userId: input.userId,
       cache: input.cache && isCacheChannel(channel),
-      ttlSeconds: this.config.cacheTtlSeconds,
+      ttlSeconds: readSettings(this.env).cacheTtlSeconds,
     })
   }
 

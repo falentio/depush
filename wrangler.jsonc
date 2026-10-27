@@ -3,15 +3,18 @@
   "name": "depush",
   "main": "./src/index.ts",
   "compatibility_date": "2026-10-26",
+  "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "durable_objects": {
     "bindings": [
       { "name": "APP_HUB", "class_name": "AppHub" },
-      { "name": "CHANNEL", "class_name": "Channel" }
+      { "name": "CHANNEL", "class_name": "Channel" },
+      { "name": "REGISTRY", "class_name": "Registry" }
     ]
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["AppHub"] },
-    { "tag": "v2", "new_sqlite_classes": ["Channel"] }
+    { "tag": "v2", "new_sqlite_classes": ["Channel"] },
+    { "tag": "v3", "new_sqlite_classes": ["Registry"] }
   ]
 }
