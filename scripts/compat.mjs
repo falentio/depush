@@ -529,6 +529,207 @@ async function checkChannelInfoRejection(server) {
   )
 }
 
+function parseJson(raw) {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+function openRawSocket(path) {
+  const ws = new WebSocket(`ws://${HOST}:${port}${path}`)
+  const frames = []
+  let cursor = 0
+  let close = null
+
+  ws.addEventListener('error', () => {})
+  ws.addEventListener('message', (event) => {
+    if (typeof event.data === 'string') frames.push(event.data)
+  })
+  ws.addEventListener('close', (event) => {
+    close = { code: event.code, reason: event.reason }
+  })
+
+  const isPusherError = (code) => (frame) =>
+    frame.event === 'pusher:error' && frame.data?.code === code
+  const isEvent = (name) => (frame) => frame.event === name
+
+  async function waitFor(predicate, label, timeoutMs = 10_000) {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      while (cursor < frames.length) {
+        const frame = parseJson(frames[cursor])
+        cursor += 1
+        if (frame !== null && predicate(frame)) return frame
+      }
+      if (close !== null) throw new Error(`${label}: socket closed with ${close.code}`)
+      if (Date.now() > deadline) throw new Error(`${label}: timed out`)
+      await delay(20)
+    }
+  }
+
+  async function waitForClose(label, timeoutMs = 10_000) {
+    const deadline = Date.now() + timeoutMs
+    while (close === null) {
+      if (Date.now() > deadline) throw new Error(`${label}: timed out waiting for close`)
+      await delay(20)
+    }
+    return close
+  }
+
+  return {
+    rawFrames: frames,
+    send: (payload) => ws.send(payload),
+    close: () => {
+      try {
+        ws.close(1000, 'done')
+      } catch {}
+    },
+    waitFor,
+    waitForClose,
+    isPusherError,
+    isEvent,
+  }
+}
+
+async function openConnectedSocket() {
+  const socket = openRawSocket(`/app/${APP_KEY}?protocol=7`)
+  await socket.waitFor(socket.isEvent('pusher:connection_established'), 'connection_established')
+  return socket
+}
+
+async function checkHandshakeRejection(path, code, label) {
+  const socket = openRawSocket(path)
+  try {
+    const close = await socket.waitForClose(label)
+    assert.equal(close.code, code, `${label}: close code`)
+
+    const error = socket.rawFrames
+      .map(parseJson)
+      .find(
+        (frame) => frame !== null && frame.event === 'pusher:error' && frame.data?.code === code,
+      )
+    if (socket.rawFrames.length > 0) {
+      assert.ok(error, `${label}: frames arrived without a ${code} pusher:error`)
+    }
+    return error !== undefined
+  } finally {
+    socket.close()
+  }
+}
+
+function deliveryNote(delivered) {
+  return delivered ? ' (pusher:error then close)' : ' (close only: the frame did not arrive)'
+}
+
+async function checkBadFrameRecovery() {
+  const socket = await openConnectedSocket()
+  try {
+    socket.send('not json')
+    await socket.waitFor(socket.isPusherError(4300), '4300 for a non-JSON frame')
+    socket.send(JSON.stringify({ event: 'pusher:ping', data: {} }))
+    await socket.waitFor(socket.isEvent('pusher:pong'), 'pong after a bad frame')
+    socket.close()
+    await socket.waitForClose('close after a bad frame')
+  } finally {
+    socket.close()
+  }
+}
+
+async function checkEncryptedSubscribe() {
+  const socket = await openConnectedSocket()
+  try {
+    socket.send(
+      JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'private-encrypted-x' } }),
+    )
+    await socket.waitFor(socket.isPusherError(4009), '4009 for an encrypted channel')
+    const close = await socket.waitForClose('encrypted subscribe close')
+    assert.equal(close.code, 4009)
+  } finally {
+    socket.close()
+  }
+}
+
+async function checkChannelNameRejection() {
+  const socket = await openConnectedSocket()
+  try {
+    socket.send(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'a'.repeat(201) } }))
+    await socket.waitFor(socket.isPusherError(4300), '4300 for a 201-character channel')
+    socket.send(JSON.stringify({ event: 'pusher:ping', data: {} }))
+    await socket.waitFor(socket.isEvent('pusher:pong'), 'pong after a bad channel name')
+    socket.close()
+    await socket.waitForClose('close after a bad channel name')
+  } finally {
+    socket.close()
+  }
+}
+
+async function checkFrameCeiling() {
+  const socket = await openConnectedSocket()
+  try {
+    const oversized = JSON.stringify({
+      event: 'pusher:ping',
+      data: {},
+      pad: 'x'.repeat(70 * 1024),
+    })
+    assert.ok(Buffer.byteLength(oversized) > 64 * 1024, 'the test frame is not over 64 KiB')
+
+    socket.send(oversized)
+    const error = await socket.waitFor(socket.isPusherError(4300), '4300 for a 70 KiB frame')
+    assert.match(error.data.message, /64KB/)
+
+    socket.send(JSON.stringify({ event: 'pusher:ping', data: {} }))
+    await socket.waitFor(socket.isEvent('pusher:pong'), 'pong after an oversized frame')
+    socket.close()
+    await socket.waitForClose('close after an oversized frame')
+  } finally {
+    socket.close()
+  }
+}
+
+async function checkBodyCeiling(baseUrl) {
+  const response = await fetch(`${baseUrl}/apps/${APP_ID}/events`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: 'x'.repeat(300 * 1024),
+  })
+  const text = await response.text()
+  assert.equal(response.status, 413, `300 KiB body: expected 413, got ${response.status}: ${text}`)
+}
+
+async function signedPublish(baseUrl, body) {
+  const timestamp = Math.floor(Date.now() / 1000)
+  const params = new URLSearchParams({
+    auth_key: APP_KEY,
+    auth_timestamp: String(timestamp),
+    auth_version: '1.0',
+    body_md5: createHash('md5').update(body).digest('hex'),
+  })
+  const signature = createHmac('sha256', APP_SECRET)
+    .update(`POST\n/apps/${APP_ID}/events\n${params}`)
+    .digest('hex')
+  params.set('auth_signature', signature)
+
+  return fetch(`${baseUrl}/apps/${APP_ID}/events?${params}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body,
+  })
+}
+
+async function checkEncryptedPublish(baseUrl) {
+  const body = JSON.stringify({
+    name: 'encrypted-nope',
+    channels: ['private-encrypted-room'],
+    data: '{}',
+  })
+  const response = await signedPublish(baseUrl, body)
+  const payload = await response.json()
+  assert.equal(response.status, 400, `expected 400, got ${response.status}`)
+  assert.match(String(payload.error), /Encrypted/)
+}
+
 const checks = [
   ['pusher-js connects and subscribes to public-smoke', null],
   ['pusher SDK trigger reaches pusher-js', null],
@@ -548,6 +749,16 @@ const checks = [
   ['GET /channels lists the occupied presence channel with user_count', null],
   ['GET /channels/<name> and /users report occupancy, counts, and ids', null],
   ['GET /channels/<public>?info=user_count rejects with 400', null],
+  ['a wrong key reports 4001 and closes with 4001', null],
+  ['protocol=6 reports 4007 and closes with 4007', null],
+  ['a missing protocol reports 4008 and closes with 4008', null],
+  ['a WebSocket upgrade to /nope reports 4005 and closes with 4005', null],
+  ['a non-JSON frame gets 4300 and the socket still answers ping', null],
+  ['an encrypted subscribe gets 4009 and closes with 4009', null],
+  ['a 201-character channel gets 4300 and the socket stays usable', null],
+  ['a 70 KiB text frame gets 4300 and the socket stays usable', null],
+  ['an unauthenticated 300 KiB publish returns 413', null],
+  ['a signed publish to an encrypted channel returns 400', null],
 ]
 
 const port = Number(process.env.PUSHER_COMPAT_PORT ?? (await findFreePort(DEFAULT_PORT)))
@@ -655,6 +866,50 @@ try {
   await checkChannelInfoRejection(pusherServer)
   checks[17][1] = true
   console.log(`PASS 18 ${checks[17][0]}`)
+
+  const wrongKey = await checkHandshakeRejection(`/app/wrong?protocol=7`, 4001, 'wrong key')
+  checks[18][1] = true
+  console.log(`PASS 19 ${checks[18][0]}${deliveryNote(wrongKey)}`)
+
+  const oldProtocol = await checkHandshakeRejection(
+    `/app/${APP_KEY}?protocol=6`,
+    4007,
+    'protocol 6',
+  )
+  checks[19][1] = true
+  console.log(`PASS 20 ${checks[19][0]}${deliveryNote(oldProtocol)}`)
+
+  const noProtocol = await checkHandshakeRejection(`/app/${APP_KEY}`, 4008, 'missing protocol')
+  checks[20][1] = true
+  console.log(`PASS 21 ${checks[20][0]}${deliveryNote(noProtocol)}`)
+
+  const missingPath = await checkHandshakeRejection('/nope', 4005, 'unknown path')
+  checks[21][1] = true
+  console.log(`PASS 22 ${checks[21][0]}${deliveryNote(missingPath)}`)
+
+  await checkBadFrameRecovery()
+  checks[22][1] = true
+  console.log(`PASS 23 ${checks[22][0]}`)
+
+  await checkEncryptedSubscribe()
+  checks[23][1] = true
+  console.log(`PASS 24 ${checks[23][0]}`)
+
+  await checkChannelNameRejection()
+  checks[24][1] = true
+  console.log(`PASS 25 ${checks[24][0]}`)
+
+  await checkFrameCeiling()
+  checks[25][1] = true
+  console.log(`PASS 26 ${checks[25][0]}`)
+
+  await checkBodyCeiling(baseUrl)
+  checks[26][1] = true
+  console.log(`PASS 27 ${checks[26][0]}`)
+
+  await checkEncryptedPublish(baseUrl)
+  checks[27][1] = true
+  console.log(`PASS 28 ${checks[27][0]}`)
 } catch (error) {
   for (let index = 0; index < checks.length; index += 1) {
     if (checks[index][1] === null) {
