@@ -1,2 +1,3 @@
 unit	commit	verdict	evidence
 u1-core	a4706ac2596609fbd37f1b505ccde7eecc9a7f05	unit-test-verified	scripts/compat.mjs 5/5 official pusher-js 8.6 and pusher 5.3; pnpm test 12/12; check, typecheck, build, wrangler dry-run green
+u2-private-presence	6f4e6adcf1de5fb7f717fcc8291131e5a41b9514	unit-test-verified	scripts/compat.mjs 10/10; pnpm test 26/26; check, typecheck, build, dry-run green; presence vector corrected to 31935e7d
