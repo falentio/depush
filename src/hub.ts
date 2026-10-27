@@ -102,6 +102,30 @@ const socketStateSchema = v.object({
   subscriptions: v.array(subscriptionSchema),
 })
 
+const SUBSCRIBE_REFUSALS = {
+  encrypted_channel: {
+    message: 'Encrypted channels are not supported',
+    code: PUSHER_ERROR_AUTH_REQUIRED,
+  },
+  hub_not_initialized: {
+    message: 'AppHub is not initialized',
+    code: PUSHER_ERROR_AUTH_REQUIRED,
+  },
+  invalid_auth: {
+    message: 'Invalid channel authorization',
+    code: PUSHER_ERROR_AUTH_REQUIRED,
+  },
+} as const
+
+const CLIENT_EVENT_REFUSALS = {
+  not_subscribed: {
+    message: 'Client events require a private or presence channel subscription',
+    code: PUSHER_ERROR_BAD_MESSAGE,
+  },
+  data_too_large: { message: 'Event data exceeds 10KB', code: PUSHER_ERROR_BAD_MESSAGE },
+  rate_limited: { message: 'Client event rate limit exceeded', code: PUSHER_ERROR_RATE_LIMIT },
+} as const
+
 export class AppHub extends DurableObject<AppBindings> {
   private config: AppConfig | null = null
   private readonly clientLimiter = new ClientEventLimiter()
@@ -274,13 +298,7 @@ export class AppHub extends DurableObject<AppBindings> {
 
     const kind = channelKind(frame.channel)
     if (kind === 'encrypted') {
-      this.log.warn('subscribe_refused', {
-        socketId: current.socketId,
-        channel: frame.channel,
-        reason: 'encrypted_channel',
-        code: PUSHER_ERROR_AUTH_REQUIRED,
-      })
-      this.fail(socket, 'Encrypted channels are not supported', PUSHER_ERROR_AUTH_REQUIRED)
+      this.subscribeRefused(socket, current.socketId, frame.channel, 'encrypted_channel')
       return
     }
 
@@ -288,13 +306,7 @@ export class AppHub extends DurableObject<AppBindings> {
     if (kind !== 'public') {
       const config = this.config
       if (config === null) {
-        this.log.warn('subscribe_refused', {
-          socketId: current.socketId,
-          channel: frame.channel,
-          reason: 'hub_not_initialized',
-          code: PUSHER_ERROR_AUTH_REQUIRED,
-        })
-        this.fail(socket, 'AppHub is not initialized', PUSHER_ERROR_AUTH_REQUIRED)
+        this.subscribeRefused(socket, current.socketId, frame.channel, 'hub_not_initialized')
         return
       }
       const auth = await verifyChannelAuth(
@@ -307,13 +319,7 @@ export class AppHub extends DurableObject<AppBindings> {
         config,
       )
       if (!auth.ok) {
-        this.log.warn('subscribe_refused', {
-          socketId: current.socketId,
-          channel: frame.channel,
-          reason: 'invalid_auth',
-          code: PUSHER_ERROR_AUTH_REQUIRED,
-        })
-        this.fail(socket, 'Invalid channel authorization', PUSHER_ERROR_AUTH_REQUIRED)
+        this.subscribeRefused(socket, current.socketId, frame.channel, 'invalid_auth')
         return
       }
       presence = auth.presence
@@ -380,40 +386,17 @@ export class AppHub extends DurableObject<AppBindings> {
     const kind = channelKind(frame.channel)
     const subscription = state.subscriptions.find((entry) => entry.channel === frame.channel)
     if (subscription === undefined || (kind !== 'private' && kind !== 'presence')) {
-      this.log.warn('client_event_refused', {
-        socketId: state.socketId,
-        channel: frame.channel,
-        reason: 'not_subscribed',
-        code: PUSHER_ERROR_BAD_MESSAGE,
-      })
-      socket.send(
-        errorFrame(
-          'Client events require a private or presence channel subscription',
-          PUSHER_ERROR_BAD_MESSAGE,
-        ),
-      )
+      this.clientEventRefused(socket, state.socketId, frame.channel, 'not_subscribed')
       return
     }
 
     if (dataBytes(frame.data) > MAX_DATA_BYTES) {
-      this.log.warn('client_event_refused', {
-        socketId: state.socketId,
-        channel: frame.channel,
-        reason: 'data_too_large',
-        code: PUSHER_ERROR_BAD_MESSAGE,
-      })
-      socket.send(errorFrame('Event data exceeds 10KB', PUSHER_ERROR_BAD_MESSAGE))
+      this.clientEventRefused(socket, state.socketId, frame.channel, 'data_too_large')
       return
     }
 
     if (!this.clientLimiter.allow(state.socketId, Date.now())) {
-      this.log.warn('client_event_refused', {
-        socketId: state.socketId,
-        channel: frame.channel,
-        reason: 'rate_limited',
-        code: PUSHER_ERROR_RATE_LIMIT,
-      })
-      socket.send(errorFrame('Client event rate limit exceeded', PUSHER_ERROR_RATE_LIMIT))
+      this.clientEventRefused(socket, state.socketId, frame.channel, 'rate_limited')
       return
     }
 
@@ -522,6 +505,28 @@ export class AppHub extends DurableObject<AppBindings> {
     socket.send(
       cached === null ? cacheMiss(channel) : channelEvent(cached.name, channel, cached.data),
     )
+  }
+
+  private subscribeRefused(
+    socket: WebSocket,
+    socketId: string,
+    channel: string,
+    reason: keyof typeof SUBSCRIBE_REFUSALS,
+  ): void {
+    const refusal = SUBSCRIBE_REFUSALS[reason]
+    this.log.warn('subscribe_refused', { socketId, channel, reason, code: refusal.code })
+    this.fail(socket, refusal.message, refusal.code)
+  }
+
+  private clientEventRefused(
+    socket: WebSocket,
+    socketId: string,
+    channel: string,
+    reason: keyof typeof CLIENT_EVENT_REFUSALS,
+  ): void {
+    const refusal = CLIENT_EVENT_REFUSALS[reason]
+    this.log.warn('client_event_refused', { socketId, channel, reason, code: refusal.code })
+    socket.send(errorFrame(refusal.message, refusal.code))
   }
 
   private fail(socket: WebSocket, message: string, code: number): void {
