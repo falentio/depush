@@ -11,7 +11,6 @@ export type AuthStore = {
   subscribe(listener: () => void): () => void
   /** Single-flight and cached. Resolves `unavailable`; never resolves `pending`. */
   ensure(): Promise<ProbedAuth>
-  /** Forced probe. Used by the offline retry and the role refresh. */
   refresh(): Promise<ProbedAuth>
   /** POST, then probe. A failed POST throws and leaves the state untouched. */
   signIn(input: Credentials): Promise<ProbedAuth>
@@ -22,7 +21,6 @@ export type AuthStore = {
   expire(): Promise<void>
 }
 
-/** The only function that turns the server's role string into the auth union. */
 export function toAuth(session: Session | null): ProbedAuth {
   if (session === null) return { state: 'anonymous', reason: 'signed-out' }
 
@@ -57,6 +55,14 @@ export function createAuthStore(auth: Api['auth']): AuthStore {
     return state.state === 'pending' ? null : state
   }
 
+  function isCurrent(started: number): boolean {
+    return started === generation
+  }
+
+  function commitIfCurrent(started: number, next: ProbedAuth): ProbedAuth {
+    return isCurrent(started) ? commit(next) : (settled() ?? next)
+  }
+
   async function probe(): Promise<ProbedAuth> {
     try {
       return toAuth(await auth.readSession())
@@ -71,9 +77,7 @@ export function createAuthStore(auth: Api['auth']): AuthStore {
     if (inflight !== null) return inflight
 
     const started = generation
-    const running = probe().then((result) =>
-      started === generation ? commit(result) : (settled() ?? result),
-    )
+    const running = probe().then((result) => commitIfCurrent(started, result))
 
     inflight = running
     void running.then(
@@ -90,8 +94,7 @@ export function createAuthStore(auth: Api['auth']): AuthStore {
   async function refresh(): Promise<ProbedAuth> {
     const started = generation
     const result = await probe()
-    if (started !== generation) return settled() ?? commit(result)
-    return commit(result)
+    return commitIfCurrent(started, result)
   }
 
   async function signIn(input: Credentials): Promise<ProbedAuth> {
@@ -121,7 +124,7 @@ export function createAuthStore(auth: Api['auth']): AuthStore {
     if (state.state !== 'admin' && state.state !== 'user') return
     const started = generation
     const next = await probe()
-    if (started !== generation) return
+    if (!isCurrent(started)) return
     if (next.state !== 'anonymous') return
     commit({ state: 'anonymous', reason: 'expired' })
   }
