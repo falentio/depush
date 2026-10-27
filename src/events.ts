@@ -1,7 +1,12 @@
 import * as v from 'valibot'
+import type { ChannelKind } from './protocol'
+import { channelKind, MAX_EVENT_NAME } from './protocol'
 
 export const MAX_DATA_BYTES = 10 * 1024
 export const MAX_CHANNELS = 100
+export const MAX_BATCH_EVENTS = 10
+
+const encoder = new TextEncoder()
 
 export type Trigger = {
   name: string
@@ -10,12 +15,52 @@ export type Trigger = {
   socketId: string | undefined
 }
 
-export type TriggerResult =
-  | { ok: true; trigger: Trigger }
-  | { ok: false; status: 400 | 413; error: string }
+export type BatchEvent = {
+  name: string
+  channel: string
+  data: string
+  socketId: string | undefined
+}
+
+type ParseFailure = { ok: false; status: 400 | 413; error: string }
+
+export type TriggerResult = { ok: true; trigger: Trigger } | ParseFailure
+
+export type BatchResult = { ok: true; events: BatchEvent[] } | ParseFailure
+
+export type ChannelInfoRequest = {
+  userCount: boolean
+  subscriptionCount: boolean
+}
+
+export type ChannelInfoParse = { ok: true; info: ChannelInfoRequest } | { ok: false; error: string }
+
+export type ChannelSnapshotEntry = {
+  subscriptionCount: number
+  userIds: string[]
+}
+
+export type ChannelSnapshot = Record<string, ChannelSnapshotEntry>
+
+export type ChannelAttributes = {
+  user_count?: number
+  subscription_count?: number
+}
+
+export type ChannelListResult =
+  | { ok: true; body: { channels: Record<string, ChannelAttributes> } }
+  | { ok: false; error: string }
+
+export type ChannelInfoResult =
+  | { ok: true; body: { occupied: boolean } & ChannelAttributes }
+  | { ok: false; error: string }
+
+export type ChannelUsersResult =
+  | { ok: true; body: { users: { id: string }[] } }
+  | { ok: false; error: string }
 
 const channelName = v.pipe(v.string(), v.minLength(1))
-const eventName = v.pipe(v.string(), v.minLength(1), v.maxLength(200))
+const eventName = v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_EVENT_NAME))
 const socketId = v.pipe(v.string(), v.regex(/^\d+\.\d+$/))
 
 const eventFields = {
@@ -32,6 +77,21 @@ const triggerSchema = v.union([
   v.object({ ...eventFields, channel: channelName }),
 ])
 
+const batchEventSchema = v.object({
+  ...eventFields,
+  channel: channelName,
+  info: v.optional(v.unknown()),
+})
+
+const batchSchema = v.object({
+  batch: v.pipe(v.array(batchEventSchema), v.minLength(1), v.maxLength(MAX_BATCH_EVENTS)),
+})
+
+const INFO_ATTRIBUTES = new Map<string, 'userCount' | 'subscriptionCount'>([
+  ['user_count', 'userCount'],
+  ['subscription_count', 'subscriptionCount'],
+])
+
 export function parseTrigger(body: Uint8Array): TriggerResult {
   let json: unknown
   try {
@@ -45,7 +105,7 @@ export function parseTrigger(body: Uint8Array): TriggerResult {
     return invalid('Invalid event payload')
   }
 
-  if (new TextEncoder().encode(parsed.output.data).length > MAX_DATA_BYTES) {
+  if (dataBytes(parsed.output.data) > MAX_DATA_BYTES) {
     return { ok: false, status: 413, error: 'Event data exceeds 10KB' }
   }
 
@@ -61,6 +121,128 @@ export function parseTrigger(body: Uint8Array): TriggerResult {
   }
 }
 
-function invalid(error: string): TriggerResult {
+export function parseBatch(body: Uint8Array): BatchResult {
+  let json: unknown
+  try {
+    json = JSON.parse(new TextDecoder().decode(body))
+  } catch {
+    return invalid('Body must be JSON')
+  }
+
+  const parsed = v.safeParse(batchSchema, json)
+  if (!parsed.success) {
+    return invalid('Invalid batch payload')
+  }
+
+  const events: BatchEvent[] = []
+  for (const event of parsed.output.batch) {
+    if (event.info !== undefined) {
+      return invalid('Per-event info is not supported')
+    }
+    if (channelKind(event.channel) === 'encrypted') {
+      return invalid('Encrypted channels are not supported')
+    }
+    if (dataBytes(event.data) > MAX_DATA_BYTES) {
+      return { ok: false, status: 413, error: 'Event data exceeds 10KB' }
+    }
+    events.push({
+      name: event.name,
+      channel: event.channel,
+      data: event.data,
+      socketId: event.socket_id,
+    })
+  }
+
+  return { ok: true, events }
+}
+
+export function dataBytes(data: unknown): number {
+  const text: string | undefined = typeof data === 'string' ? data : JSON.stringify(data)
+  return text === undefined ? 0 : encoder.encode(text).length
+}
+
+export function parseChannelInfo(raw: string | undefined): ChannelInfoParse {
+  const info: ChannelInfoRequest = { userCount: false, subscriptionCount: false }
+
+  for (const name of (raw ?? '').split(',')) {
+    if (name === '') continue
+    const attribute = INFO_ATTRIBUTES.get(name)
+    if (attribute === undefined) {
+      return { ok: false, error: `Unsupported info attribute: ${name}` }
+    }
+    info[attribute] = true
+  }
+
+  return { ok: true, info }
+}
+
+export function channelList(
+  snapshot: ChannelSnapshot,
+  prefix: string | undefined,
+  info: ChannelInfoRequest,
+): ChannelListResult {
+  if (info.userCount && (prefix === undefined || !prefix.startsWith('presence-'))) {
+    return {
+      ok: false,
+      error: 'user_count requires a filter_by_prefix that selects presence channels',
+    }
+  }
+
+  const channels: Record<string, ChannelAttributes> = {}
+  for (const [name, entry] of Object.entries(snapshot)) {
+    if (prefix !== undefined && !name.startsWith(prefix)) continue
+
+    const attributes = channelAttributes(channelKind(name), entry, info)
+    if (attributes === null) {
+      return { ok: false, error: `info does not apply to channel ${name}` }
+    }
+    channels[name] = attributes
+  }
+
+  return { ok: true, body: { channels } }
+}
+
+export function channelInfo(
+  snapshot: ChannelSnapshot,
+  name: string,
+  info: ChannelInfoRequest,
+): ChannelInfoResult {
+  const entry = snapshot[name] ?? { subscriptionCount: 0, userIds: [] }
+  const attributes = channelAttributes(channelKind(name), entry, info)
+  if (attributes === null) {
+    return { ok: false, error: `info does not apply to channel ${name}` }
+  }
+
+  return { ok: true, body: { occupied: snapshot[name] !== undefined, ...attributes } }
+}
+
+export function channelUsers(snapshot: ChannelSnapshot, name: string): ChannelUsersResult {
+  if (channelKind(name) !== 'presence') {
+    return { ok: false, error: 'users is only available for presence channels' }
+  }
+
+  const entry = snapshot[name]
+  return {
+    ok: true,
+    body: { users: entry === undefined ? [] : entry.userIds.map((id) => ({ id })) },
+  }
+}
+
+function channelAttributes(
+  kind: ChannelKind,
+  entry: ChannelSnapshotEntry,
+  info: ChannelInfoRequest,
+): ChannelAttributes | null {
+  const presence = kind === 'presence'
+  if (info.userCount && !presence) return null
+  if (info.subscriptionCount && presence) return null
+
+  const attributes: ChannelAttributes = {}
+  if (info.userCount) attributes.user_count = entry.userIds.length
+  if (info.subscriptionCount) attributes.subscription_count = entry.subscriptionCount
+  return attributes
+}
+
+function invalid(error: string): ParseFailure {
   return { ok: false, status: 400, error }
 }

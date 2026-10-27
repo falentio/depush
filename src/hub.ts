@@ -4,10 +4,13 @@ import { verifyChannelAuth } from './auth'
 import type { AppConfig } from './config'
 import { readConfig } from './config'
 import type { AppBindings } from './env'
+import type { ChannelSnapshot } from './events'
+import { dataBytes, MAX_DATA_BYTES } from './events'
 import type { ClientFrame, PresenceMember } from './protocol'
 import {
   channelEvent,
   channelKind,
+  clientEventFrame,
   connectionEstablished,
   errorFrame,
   isWebSocketUpgrade,
@@ -21,7 +24,11 @@ import {
 } from './protocol'
 
 const PUSHER_ERROR_BAD_MESSAGE = 4300
+const PUSHER_ERROR_RATE_LIMIT = 4301
 const PUSHER_ERROR_AUTH_REQUIRED = 4009
+
+export const CLIENT_EVENT_LIMIT = 10
+export const CLIENT_EVENT_WINDOW_MS = 1000
 
 export type Subscription = {
   channel: string
@@ -41,6 +48,26 @@ export type BroadcastInput = {
 }
 
 type SubscribeFrame = Extract<ClientFrame, { kind: 'subscribe' }>
+type ClientEventFrame = Extract<ClientFrame, { kind: 'client' }>
+
+export class ClientEventLimiter {
+  private readonly events = new Map<string, number[]>()
+
+  allow(socketId: string, now: number): boolean {
+    const recent = (this.events.get(socketId) ?? []).filter(
+      (timestamp) => now - timestamp < CLIENT_EVENT_WINDOW_MS,
+    )
+    const allowed = recent.length < CLIENT_EVENT_LIMIT
+
+    if (allowed) recent.push(now)
+    this.events.set(socketId, recent)
+    return allowed
+  }
+
+  clear(socketId: string): void {
+    this.events.delete(socketId)
+  }
+}
 
 const presenceMemberSchema = v.object({
   userId: v.string(),
@@ -59,6 +86,7 @@ const socketStateSchema = v.object({
 
 export class AppHub extends DurableObject<AppBindings> {
   private readonly config: AppConfig
+  private readonly clientLimiter = new ClientEventLimiter()
 
   constructor(ctx: DurableObjectState, env: AppBindings) {
     super(ctx, env)
@@ -96,6 +124,10 @@ export class AppHub extends DurableObject<AppBindings> {
     }
   }
 
+  async channelSnapshot(): Promise<ChannelSnapshot> {
+    return aggregateChannels(this.socketStates())
+  }
+
   override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') {
       socket.send(errorFrame('Binary frames are not supported', PUSHER_ERROR_BAD_MESSAGE))
@@ -120,6 +152,9 @@ export class AppHub extends DurableObject<AppBindings> {
       case 'unsubscribe':
         this.unsubscribe(socket, parsed.frame.channel)
         return
+      case 'client':
+        this.clientEvent(socket, parsed.frame)
+        return
     }
   }
 
@@ -128,6 +163,8 @@ export class AppHub extends DurableObject<AppBindings> {
 
     const state = readSocketState(socket)
     if (state === null) return
+
+    this.clientLimiter.clear(state.socketId)
 
     for (const subscription of state.subscriptions) {
       if (subscription.presence === undefined) continue
@@ -212,6 +249,44 @@ export class AppHub extends DurableObject<AppBindings> {
     }
   }
 
+  private clientEvent(socket: WebSocket, frame: ClientEventFrame): void {
+    const state = readSocketState(socket)
+    if (state === null) return
+
+    const kind = channelKind(frame.channel)
+    const subscription = state.subscriptions.find((entry) => entry.channel === frame.channel)
+    if (subscription === undefined || (kind !== 'private' && kind !== 'presence')) {
+      socket.send(
+        errorFrame(
+          'Client events require a private or presence channel subscription',
+          PUSHER_ERROR_BAD_MESSAGE,
+        ),
+      )
+      return
+    }
+
+    if (dataBytes(frame.data) > MAX_DATA_BYTES) {
+      socket.send(errorFrame('Event data exceeds 10KB', PUSHER_ERROR_BAD_MESSAGE))
+      return
+    }
+
+    if (!this.clientLimiter.allow(state.socketId, Date.now())) {
+      socket.send(errorFrame('Client event rate limit exceeded', PUSHER_ERROR_RATE_LIMIT))
+      return
+    }
+
+    this.sendToChannel(
+      frame.channel,
+      clientEventFrame({
+        name: frame.name,
+        channel: frame.channel,
+        data: frame.data,
+        userId: kind === 'presence' ? subscription.presence?.userId : undefined,
+      }),
+      state.socketId,
+    )
+  }
+
   private leavePresence(channel: string, userId: string, socketId: string): void {
     const remaining = collectPresenceMembers(this.socketStates(), channel, socketId)
     if (remaining.some((member) => member.userId === userId)) return
@@ -272,6 +347,31 @@ export function collectPresenceMembers(
     }
   }
   return [...members.values()]
+}
+
+export function aggregateChannels(states: SocketState[]): ChannelSnapshot {
+  const channels = new Map<string, { subscriptionCount: number; userIds: Set<string> }>()
+
+  for (const state of states) {
+    for (const subscription of state.subscriptions) {
+      let entry = channels.get(subscription.channel)
+      if (entry === undefined) {
+        entry = { subscriptionCount: 0, userIds: new Set() }
+        channels.set(subscription.channel, entry)
+      }
+      entry.subscriptionCount += 1
+      if (subscription.presence !== undefined) entry.userIds.add(subscription.presence.userId)
+    }
+  }
+
+  const snapshot: ChannelSnapshot = {}
+  for (const [name, entry] of channels) {
+    snapshot[name] = {
+      subscriptionCount: entry.subscriptionCount,
+      userIds: [...entry.userIds].sort(),
+    }
+  }
+  return snapshot
 }
 
 function readSocketState(socket: WebSocket): SocketState | null {

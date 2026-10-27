@@ -40,7 +40,6 @@ describe('parseFrame', () => {
 
   it('rejects unknown pusher events', () => {
     expect(parseFrame('{"event":"pusher:signin","data":{}}')).toEqual({ ok: false })
-    expect(parseFrame('{"event":"client-typing","channel":"news"}')).toEqual({ ok: false })
   })
 
   it('parses subscribe with auth and channel_data', () => {

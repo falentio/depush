@@ -10,6 +10,17 @@ export type ClientFrame =
       channelData?: string | undefined
     }
   | { kind: 'unsubscribe'; channel: string }
+  | { kind: 'client'; name: string; channel: string; data: unknown }
+
+export type ClientEventBroadcast = {
+  name: string
+  channel: string
+  data: unknown
+  userId: string | undefined
+}
+
+export const CLIENT_EVENT_PREFIX = 'client-'
+export const MAX_EVENT_NAME = 200
 
 export type ChannelKind = 'public' | 'private' | 'presence' | 'encrypted'
 
@@ -21,6 +32,14 @@ export type PresenceMember = {
 export type FrameParse = { ok: true; frame: ClientFrame } | { ok: false }
 
 const channelName = v.pipe(v.string(), v.minLength(1))
+
+const envelopeSchema = v.object({ event: v.string() })
+
+const clientFrameSchema = v.object({
+  event: v.pipe(v.string(), v.startsWith(CLIENT_EVENT_PREFIX), v.maxLength(MAX_EVENT_NAME)),
+  channel: channelName,
+  data: v.optional(v.unknown()),
+})
 
 const frameSchema = v.variant('event', [
   v.object({ event: v.literal('pusher:ping') }),
@@ -45,6 +64,23 @@ export function parseFrame(raw: string): FrameParse {
     json = JSON.parse(raw)
   } catch {
     return { ok: false }
+  }
+
+  const envelope = v.safeParse(envelopeSchema, json)
+  if (!envelope.success) return { ok: false }
+
+  if (envelope.output.event.startsWith(CLIENT_EVENT_PREFIX)) {
+    const parsed = v.safeParse(clientFrameSchema, json)
+    if (!parsed.success) return { ok: false }
+    return {
+      ok: true,
+      frame: {
+        kind: 'client',
+        name: parsed.output.event,
+        channel: parsed.output.channel,
+        data: parsed.output.data,
+      },
+    }
   }
 
   const parsed = v.safeParse(frameSchema, json)
@@ -132,6 +168,16 @@ export function channelKind(channel: string): ChannelKind {
 
 export function channelEvent(name: string, channel: string, data: string): string {
   return JSON.stringify({ event: name, channel, data })
+}
+
+export function clientEventFrame(input: ClientEventBroadcast): string {
+  const frame: Record<string, unknown> = {
+    event: input.name,
+    channel: input.channel,
+    data: input.data,
+  }
+  if (input.userId !== undefined) frame.user_id = input.userId
+  return JSON.stringify(frame)
 }
 
 export function errorFrame(message: string, code: number): string {
