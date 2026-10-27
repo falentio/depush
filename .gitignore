@@ -3,5 +3,6 @@ dist/
 .wrangler/
 coverage/
 .dev.vars
+.dev.vars.*-backup
 *.log
 .DS_Store

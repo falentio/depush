@@ -515,6 +515,7 @@ to the Durable Object.
 pnpm check                              # Biome lint and format check
 pnpm typecheck                          # tsc --noEmit
 pnpm test                               # Vitest in workerd
+pnpm test:compat                        # Node Vitest suite for the official pusher server SDK
 pnpm build                              # Vite build
 pnpm exec wrangler deploy --dry-run     # Check the deploy bundle and bindings
 pnpm compat                             # Run the official SDKs against a local server
@@ -524,6 +525,13 @@ pnpm compat                             # Run the official SDKs against a local 
 `.dev.vars`, writes test values, plays the application server for private and presence auth, runs
 the checks, and restores the file. Set `PUSHER_COMPAT_PORT` to choose the server port. It uses
 8787 when that port is free and the next free port otherwise.
+
+`pnpm test:compat` starts its own dev server, writes test credentials to `.dev.vars`, runs the Node
+Vitest suite in `test/compat`, and restores the file afterwards. It starts at port 8792 and takes
+the next free port unless `PUSHER_COMPAT_PORT` is set. To compare the same signed HTTP calls
+against Pusher Cloud, export `PUSHER_CLOUD_APP_ID`, `PUSHER_CLOUD_APP_KEY`, and
+`PUSHER_CLOUD_APP_SECRET`; the cloud block is skipped when any is missing. The suite reads those
+variables from the environment and never writes them to a file. Do not commit them.
 
 Run `pnpm cf-typegen` after you change `wrangler.jsonc`, then commit the regenerated
 `worker-configuration.d.ts`.

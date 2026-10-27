@@ -13,13 +13,14 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-plugin/types"]
+    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-plugin/types", "node"]
   },
   "include": [
     "src/**/*.ts",
     "test/**/*.ts",
     "vite.config.ts",
     "vitest.config.ts",
+    "vitest.compat.config.ts",
     "worker-configuration.d.ts"
   ]
 }
