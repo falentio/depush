@@ -20,6 +20,8 @@ const CACHE_CHANNEL = 'cache-smoke'
 const CACHE_EMPTY_CHANNEL = 'cache-empty'
 const PRIVATE_CACHE_CHANNEL = 'private-cache-room'
 const PRESENCE_CACHE_CHANNEL = 'presence-cache-room'
+const RUN_ID = Date.now().toString(36)
+const HISTORY_ROOM = `history-room-${RUN_ID}`
 const DEV_VARS = '.dev.vars'
 const DEV_VARS_BACKUP = '.dev.vars.compat-backup'
 const DEV_VARS_CONTENT = [
@@ -937,6 +939,180 @@ async function checkPresenceCacheReplay(server, port, authPort) {
   assert.deepEqual(JSON.parse(body.cache.data), { hello: 'presence' })
 }
 
+async function checkHistoryPublish(server) {
+  await server.trigger(HISTORY_ROOM, 'first', { n: 1 })
+  await server.trigger(HISTORY_ROOM, 'second', { n: 2 })
+  await server.trigger(HISTORY_ROOM, 'third', { n: 3 })
+
+  const response = await server.get({ path: `/channels/${HISTORY_ROOM}/history` })
+  assert.equal(response.status, 200)
+  const body = await response.json()
+
+  assert.deepEqual(
+    body.events.map((event) => event.name),
+    ['third', 'second', 'first'],
+    'history is not newest first',
+  )
+  assert.deepEqual(
+    body.events.map((event) => JSON.parse(event.data)),
+    [{ n: 3 }, { n: 2 }, { n: 1 }],
+  )
+
+  const ids = body.events.map((event) => event.id)
+  assert.ok(
+    ids.every((id) => Number.isInteger(id) && id > 0),
+    `history ids are not positive integers: ${ids}`,
+  )
+  assert.deepEqual(
+    ids,
+    [...ids].sort((left, right) => right - left),
+    'ids are not descending',
+  )
+
+  for (const event of body.events) {
+    assert.equal(new Date(event.published_at).toISOString(), event.published_at)
+    assert.equal('user_id' in event, false, 'an HTTP event carried user_id')
+  }
+  assert.equal(body.next_cursor, null)
+  return body
+}
+
+async function checkHistoryPaging(server, firstPage) {
+  const limited = await server.get({
+    path: `/channels/${HISTORY_ROOM}/history`,
+    params: { limit: '2' },
+  })
+  assert.equal(limited.status, 200)
+  const page = await limited.json()
+  assert.equal(page.events.length, 2, `limit=2 returned ${page.events.length} events`)
+  assert.deepEqual(
+    page.events.map((event) => event.name),
+    ['third', 'second'],
+  )
+  assert.equal(page.next_cursor, String(page.events[1].id))
+
+  const older = await server.get({
+    path: `/channels/${HISTORY_ROOM}/history`,
+    params: { before: page.next_cursor },
+  })
+  assert.equal(older.status, 200)
+  const rest = await older.json()
+  assert.deepEqual(
+    rest.events.map((event) => event.name),
+    ['first'],
+  )
+  assert.equal(rest.next_cursor, null)
+
+  const pageIds = new Set(page.events.map((event) => event.id))
+  assert.equal(
+    rest.events.some((event) => pageIds.has(event.id)),
+    false,
+    'the second page repeated an id from the first page',
+  )
+  assert.deepEqual(
+    [...page.events, ...rest.events].map((event) => event.id),
+    firstPage.events.map((event) => event.id),
+  )
+}
+
+async function checkHistoryUserIds(server) {
+  const response = await server.get({
+    path: `/channels/${PRESENCE_CHANNEL}/history`,
+    params: { limit: '100' },
+  })
+  assert.equal(response.status, 200)
+  const body = await response.json()
+
+  const clientEvent = body.events.find((event) => event.name === 'client-typing')
+  assert.ok(clientEvent, 'the presence client event is missing from history')
+  assert.equal(clientEvent.user_id, 'bob')
+  assert.deepEqual(JSON.parse(clientEvent.data), { typing: true })
+
+  const httpEvent = body.events.find((event) => event.name === 'presence-greeting')
+  assert.ok(httpEvent, 'the presence HTTP event is missing from history')
+  assert.equal('user_id' in httpEvent, false, 'the HTTP history event carried user_id')
+}
+
+async function checkHistoryCacheReplay(server) {
+  const marker = `history-marker-${RUN_ID}`
+  await server.trigger(CACHE_CHANNEL, marker, { marker: RUN_ID })
+
+  const response = await server.get({
+    path: `/channels/${CACHE_CHANNEL}/history`,
+    params: { limit: '100' },
+  })
+  assert.equal(response.status, 200)
+  const body = await response.json()
+
+  const markerIndex = body.events.findIndex((event) => event.name === marker)
+  assert.notEqual(markerIndex, -1, 'the marker publish is missing from history')
+  assert.equal(
+    body.events.filter((event) => event.name === marker).length,
+    1,
+    'the marker publish appears more than once',
+  )
+
+  const trail = body.events.slice(markerIndex + 1)
+  const previousMarker = trail.findIndex((event) => event.name.startsWith('history-marker-'))
+  const since = trail
+    .slice(0, previousMarker === -1 ? undefined : previousMarker)
+    .map((event) => event.name)
+  assert.deepEqual(since, ['cached-update', 'cached-greeting'], `rows since the marker: ${since}`)
+}
+
+async function checkPresenceInfo(server) {
+  const response = await server.get({ path: `/channels/${PRESENCE_CHANNEL}/presence` })
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.deepEqual(body, {
+    presence: {
+      ids: ['bob', 'carol'],
+      hash: { bob: { name: 'Bob' }, carol: { name: 'Carol' } },
+      count: 2,
+    },
+  })
+
+  const users = await server.get({ path: `/channels/${PRESENCE_CHANNEL}/users` })
+  assert.equal(users.status, 200)
+  const usersBody = await users.json()
+  assert.deepEqual(
+    usersBody.users.map((user) => user.id),
+    body.presence.ids,
+  )
+}
+
+async function checkExtensionRejections(server) {
+  await assert.rejects(
+    () => server.get({ path: `/channels/${CHANNEL}/presence` }),
+    (error) => {
+      assert.equal(error.status, 400)
+      return true
+    },
+  )
+  await assert.rejects(
+    () => server.get({ path: `/channels/${HISTORY_ROOM}/history`, params: { limit: '0' } }),
+    (error) => {
+      assert.equal(error.status, 400)
+      return true
+    },
+  )
+  await assert.rejects(
+    () =>
+      server.get({
+        path: `/channels/${HISTORY_ROOM}/history`,
+        params: { before: 'not-a-number' },
+      }),
+    (error) => {
+      assert.equal(error.status, 400)
+      return true
+    },
+  )
+
+  const empty = await server.get({ path: '/channels/history-unknown/history' })
+  assert.equal(empty.status, 200)
+  assert.deepEqual(await empty.json(), { events: [], next_cursor: null })
+}
+
 const checks = [
   ['pusher-js connects and subscribes to public-smoke', null],
   ['pusher SDK trigger reaches pusher-js', null],
@@ -972,6 +1148,12 @@ const checks = [
   ['a new subscriber to cache-empty gets pusher:cache_miss and no cached event', null],
   ['after the TTL the cache info is null and a new subscriber misses', null],
   ['private-cache and presence-cache replay after auth and ignore client events', null],
+  ['three publishes list newest first with ids, parsed data, and ISO timestamps', null],
+  ['history pages with limit and before without repeating an id', null],
+  ['history carries user_id for a presence client event and omits it for HTTP events', null],
+  ['a cache publish appears in history once and the replay adds no row', null],
+  ['presence info reports sorted ids, hash, and count, and matches /users', null],
+  ['a non-presence presence request and bad history queries return 400; unknown is empty', null],
 ]
 
 const port = Number(process.env.PUSHER_COMPAT_PORT ?? (await findFreePort(DEFAULT_PORT)))
@@ -1148,6 +1330,30 @@ try {
   await checkPresenceCacheReplay(pusherServer, port, authPort)
   checks[33][1] = true
   console.log(`PASS 34 ${checks[33][0]}`)
+
+  const historyPage = await checkHistoryPublish(pusherServer)
+  checks[34][1] = true
+  console.log(`PASS 35 ${checks[34][0]}`)
+
+  await checkHistoryPaging(pusherServer, historyPage)
+  checks[35][1] = true
+  console.log(`PASS 36 ${checks[35][0]}`)
+
+  await checkHistoryUserIds(pusherServer)
+  checks[36][1] = true
+  console.log(`PASS 37 ${checks[36][0]}`)
+
+  await checkHistoryCacheReplay(pusherServer)
+  checks[37][1] = true
+  console.log(`PASS 38 ${checks[37][0]}`)
+
+  await checkPresenceInfo(pusherServer)
+  checks[38][1] = true
+  console.log(`PASS 39 ${checks[38][0]}`)
+
+  await checkExtensionRejections(pusherServer)
+  checks[39][1] = true
+  console.log(`PASS 40 ${checks[39][0]}`)
 } catch (error) {
   for (let index = 0; index < checks.length; index += 1) {
     if (checks[index][1] === null) {
