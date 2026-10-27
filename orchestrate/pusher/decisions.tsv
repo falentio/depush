@@ -1,0 +1,7 @@
+ts	phase	decision	why	evidence	result
+2026-10-27T04:40:00Z	frame	target Pusher Channels protocol v7 only	the user supplied the v7 spec and said to pick only the latest protocol	https://pusher.com/docs/channels/library_auth_reference/pusher-websockets-protocol/	decided
+2026-10-27T04:41:00Z	frame	reuse the Workers scaffold and delete the depush deployment domain, D1, and Drizzle	the Pusher hot path needs WebSockets and channel state, not relational history; one writer per app is enough	for repo commit 04033ef, src/data, drizzle/	decided
+2026-10-27T04:42:00Z	frame	one app from env and one AppHub Durable Object per app	no multi-tenancy per the user; a DO is the single writer for sockets and presence	src/durable/app-channel.ts pattern, Cloudflare DO docs	decided
+2026-10-27T04:43:00Z	frame	official pusher-js and pusher Node SDK as the acceptance harness	a drop-in claim is only proven by the real clients, not by our own frame tests	pusher-js 8.6.0, pusher 5.3.4	decided
+2026-10-27T04:44:00Z	frame	MD5 from @noble/hashes/legacy	Web Crypto has no MD5 and HTTP signatures require body_md5	@noble/hashes 2.4.0 legacy.js	decided
+2026-10-27T05:00:00Z\tu1\tdefer encrypted channels\tpass-through still needs a shared_secret the auth endpoint and publisher must agree on; v1 has no key provisioning, so private-encrypted- returns 4009 until a real use case arrives\tsrc/hub.ts, protocol v7 encrypted channel docs\tdecided

@@ -1,0 +1,5 @@
+{
+  "mode": "local",
+  "remote": null,
+  "note": "No remote and no PRs. Landing is a fast-forward of unit/<id> into local main; ledger keys by commit sha."
+}

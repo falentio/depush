@@ -1,0 +1,29 @@
+# pusher-compatible server
+
+Goal: a self-hosted Worker that existing Pusher Channels clients can point at with only host and port changes.
+
+Consumer: a self-hoster running a single app for personal or small-team projects. They configure one app id/key/secret, deploy, and use their existing pusher-js and Pusher server SDK integrations.
+
+Non-goals for v1: frontend or dashboard, accounts, multi-tenancy, teams, sharing, quotas, billing, webhooks, cache channels, Live Activities, Beams, user signin/watchlists, server-side encrypted-channel keys.
+
+Architecture:
+
+- Hono routes on Workers: `GET /app/:key` upgrades to the AppHub Durable Object; `/apps/:appId/*` is the signed HTTP API; `/healthz` is open.
+- One AppHub DO per app holds all WebSockets and channel membership. It is the only writer for channel state, so ordering and presence refcounts are serialized structurally.
+- Hibernatable WebSockets; per-socket state lives in the attachment so it survives eviction.
+- Valibot parses every frame and HTTP body. HMAC-SHA256 signatures, MD5 body hashes, and timestamp windows are verified at the boundary.
+- No database on the send path. Channel state is ephemeral, as Pusher's is.
+
+Proof: official `pusher-js` client and official `pusher` Node SDK run unmodified in `scripts/compat.mjs` against a dev server.
+
+Units:
+
+| id                  | track  | state   | outcome                                                                                                                    |
+| ------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------------------------------- |
+| u1-core             | server | landed  | v7 handshake, public channels, ping/pong, signed publish, socket_id exclusion, official SDK harness; depush domain removed |
+| u2-private-presence | server | planned | private and presence auth, presence membership and member events; encrypted channels stay rejected                         |
+| u3-client-rest      | server | planned | client events and rate limit, batch events, channel/user queries, terminate connections                                    |
+| u4-selfhost         | docs   | planned | README, env example, deploy steps, client configuration, compat script docs                                                |
+| u5-harden           | server | planned | error codes/close codes, limits, hibernation and eviction, raw protocol tests                                              |
+
+No remote, no PRs. Landing is a coordinator fast-forward of `unit/<id>` into local `main`; the ledger keys by commit SHA.
