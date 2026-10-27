@@ -1,9 +1,10 @@
 import type { Context } from 'hono'
 import { Hono } from 'hono'
+import { adminRoutes } from './admin'
 import { verifyRequest } from './auth'
 import { readBodyCapped } from './body'
 import type { AppConfig } from './config'
-import { readConfig } from './config'
+import { appConfig, readSettings } from './config'
 import type { AppBindings } from './env'
 import {
   channelInfo,
@@ -24,6 +25,7 @@ import {
 
 export { Channel } from './channel'
 export { AppHub } from './hub'
+export { Registry } from './registry'
 
 const PROTOCOL_VERSION = '7'
 const PUSHER_ERROR_NO_APP = 4001
@@ -45,16 +47,23 @@ type SignedRequest =
 
 const app = new Hono<{ Bindings: AppBindings }>()
 
+app.route('/', adminRoutes)
+
 app.get('/healthz', (c) => c.json({ status: 'ok' }))
 
-app.get('/app/:key', (c) => {
-  const config = readConfig(c.env)
-  const rejection = handshakeRejection(c.req.param('key'), c.req.query('protocol'), config)
+app.get('/app/:key', async (c) => {
+  const found = await registry(c).appByKey(c.req.param('key'))
+  const rejection = handshakeRejection(c.req.query('protocol'), found !== null)
   if (rejection !== null) {
     return upgradeRejected(c.req.raw, rejection.code, rejection.message)
   }
+  if (found === null)
+    return upgradeRejected(c.req.raw, PUSHER_ERROR_NO_APP, 'Application does not exist')
 
-  return c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId)).fetch(c.req.raw)
+  const config = appConfig(found, readSettings(c.env))
+  const hub = c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
+  await hub.init(config)
+  return hub.fetch(c.req.raw)
 })
 
 app.post('/apps/:appId/events', async (c) => {
@@ -66,7 +75,8 @@ app.post('/apps/:appId/events', async (c) => {
     return c.json({ error: parsed.error }, parsed.status)
   }
 
-  await appHub(c, signed.config).broadcast({
+  const hub = await appHub(c, signed.config)
+  await hub.broadcast({
     name: parsed.trigger.name,
     data: parsed.trigger.data,
     channels: parsed.trigger.channels,
@@ -87,7 +97,7 @@ app.post('/apps/:appId/batch_events', async (c) => {
     return c.json({ error: parsed.error }, parsed.status)
   }
 
-  const hub = appHub(c, signed.config)
+  const hub = await appHub(c, signed.config)
   for (const event of parsed.events) {
     await hub.broadcast({
       name: event.name,
@@ -114,7 +124,8 @@ app.get('/apps/:appId/channels', async (c) => {
     return c.json({ error: 'Invalid channel name' }, 400)
   }
 
-  const snapshot = await appHub(c, signed.config).channelSnapshot()
+  const hub = await appHub(c, signed.config)
+  const snapshot = await hub.channelSnapshot()
   const result = channelList(snapshot, prefix === '' ? undefined : prefix, info.info)
   if (!result.ok) return c.json({ error: result.error }, 400)
 
@@ -130,7 +141,8 @@ app.get('/apps/:appId/channels/:channelName/users', async (c) => {
     return c.json({ error: 'Invalid channel name' }, 400)
   }
 
-  const snapshot = await appHub(c, signed.config).channelSnapshot()
+  const hub = await appHub(c, signed.config)
+  const snapshot = await hub.channelSnapshot()
   const result = channelUsers(snapshot, channelName)
   if (!result.ok) return c.json({ error: result.error }, 400)
 
@@ -164,7 +176,8 @@ app.get('/apps/:appId/channels/:channelName/presence', async (c) => {
     return c.json({ error: PRESENCE_ONLY }, 400)
   }
 
-  const presence = await appHub(c, signed.config).presenceInfo(channelName)
+  const hub = await appHub(c, signed.config)
+  const presence = await hub.presenceInfo(channelName)
   if (presence === null) return c.json({ error: PRESENCE_ONLY }, 400)
 
   return c.json({ presence })
@@ -186,7 +199,8 @@ app.get('/apps/:appId/channels/:channelName', async (c) => {
     return c.json({ error: 'cache is only available on cache channels' }, 400)
   }
 
-  const snapshot = await appHub(c, signed.config).channelSnapshot()
+  const hub = await appHub(c, signed.config)
+  const snapshot = await hub.channelSnapshot()
   const result = channelInfo(snapshot, channelName, info.info)
   if (!result.ok) return c.json({ error: result.error }, 400)
 
@@ -203,8 +217,14 @@ app.notFound((c) => {
   return c.json({ error: 'Not found' }, 404)
 })
 
-function appHub(c: AppContext, config: AppConfig) {
-  return c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
+function registry(c: AppContext) {
+  return c.env.REGISTRY.get(c.env.REGISTRY.idFromName('registry'))
+}
+
+async function appHub(c: AppContext, config: AppConfig) {
+  const hub = c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
+  await hub.init(config)
+  return hub
 }
 
 function channelState(c: AppContext, config: AppConfig, channel: string) {
@@ -217,10 +237,17 @@ async function signedRequest(c: AppContext): Promise<SignedRequest> {
     return { ok: false, response: c.json({ error: 'Request body exceeds 256KB' }, 413) }
   }
 
-  const config = readConfig(c.env)
-  if (c.req.param('appId') !== config.appId) {
+  const appId = c.req.param('appId')
+  if (appId === undefined) {
     return { ok: false, response: c.json({ error: 'Invalid app id' }, 401) }
   }
+
+  const found = await registry(c).appById(appId)
+  if (found === null) {
+    return { ok: false, response: c.json({ error: 'Invalid app id' }, 401) }
+  }
+
+  const config = appConfig(found, readSettings(c.env))
 
   const auth = await verifyRequest(c.req.raw, capped.body, config, Math.floor(Date.now() / 1000))
   if (!auth.ok) {
@@ -231,11 +258,10 @@ async function signedRequest(c: AppContext): Promise<SignedRequest> {
 }
 
 function handshakeRejection(
-  key: string,
   protocol: string | undefined,
-  config: AppConfig,
+  exists: boolean,
 ): HandshakeRejection | null {
-  if (key !== config.key) {
+  if (!exists) {
     return { code: PUSHER_ERROR_NO_APP, message: 'Application does not exist' }
   }
   if (protocol === undefined) {

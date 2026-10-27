@@ -8,15 +8,16 @@ export type AppConfig = {
   cacheTtlSeconds: number
 }
 
+export type PusherSettings = Pick<AppConfig, 'activityTimeout' | 'cacheTtlSeconds'>
+
+type EnvInput = {
+  PUSHER_ACTIVITY_TIMEOUT?: string | undefined
+  PUSHER_CACHE_TTL_SECONDS?: string | undefined
+}
+
 const DEFAULT_ACTIVITY_TIMEOUT = 120
 export const DEFAULT_CACHE_TTL_SECONDS = 1800
 export const MAX_CACHE_TTL_SECONDS = 1800
-
-const credentialsSchema = v.object({
-  PUSHER_APP_ID: v.pipe(v.string(), v.minLength(1)),
-  PUSHER_APP_KEY: v.pipe(v.string(), v.minLength(1)),
-  PUSHER_APP_SECRET: v.pipe(v.string(), v.minLength(1)),
-})
 
 const activityTimeoutSchema = v.pipe(
   v.string(),
@@ -35,20 +36,23 @@ const cacheTtlSchema = v.pipe(
   v.maxValue(MAX_CACHE_TTL_SECONDS),
 )
 
-export function readConfig(env: {
-  PUSHER_APP_ID: string
-  PUSHER_APP_KEY: string
-  PUSHER_APP_SECRET: string
-  PUSHER_ACTIVITY_TIMEOUT?: string | undefined
-  PUSHER_CACHE_TTL_SECONDS?: string | undefined
-}): AppConfig {
-  const credentials = v.parse(credentialsSchema, env)
+export function readSettings(env: EnvInput): PusherSettings {
   return {
-    appId: credentials.PUSHER_APP_ID,
-    key: credentials.PUSHER_APP_KEY,
-    secret: credentials.PUSHER_APP_SECRET,
     activityTimeout: readActivityTimeout(env.PUSHER_ACTIVITY_TIMEOUT),
     cacheTtlSeconds: readCacheTtlSeconds(env.PUSHER_CACHE_TTL_SECONDS),
+  }
+}
+
+export function appConfig(
+  app: { id: string; key: string; secret: string },
+  settings: PusherSettings,
+): AppConfig {
+  return {
+    appId: app.id,
+    key: app.key,
+    secret: app.secret,
+    activityTimeout: settings.activityTimeout,
+    cacheTtlSeconds: settings.cacheTtlSeconds,
   }
 }
 

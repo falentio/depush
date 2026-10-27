@@ -1,7 +1,6 @@
 export interface AppBindings extends Env {
-  readonly PUSHER_APP_ID: string
-  readonly PUSHER_APP_KEY: string
-  readonly PUSHER_APP_SECRET: string
+  readonly BETTER_AUTH_SECRET: string | undefined
+  readonly BETTER_AUTH_URL: string | undefined
   readonly PUSHER_ACTIVITY_TIMEOUT: string | undefined
   readonly PUSHER_CACHE_TTL_SECONDS: string | undefined
 }
