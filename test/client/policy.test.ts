@@ -9,7 +9,7 @@ const authFor = (state: AccessState): SettledAuth => {
   return state === 'admin' ? { state: 'admin', user } : { state: 'user', user }
 }
 
-const requirements: Requirement[] = ['public', 'anonymous-only', 'authenticated', 'admin']
+const requirements: Requirement[] = ['anonymous-only', 'authenticated', 'admin']
 const states: AccessState[] = ['anonymous', 'user', 'admin']
 
 describe('GUARDS', () => {
@@ -20,9 +20,6 @@ describe('GUARDS', () => {
   })
 
   it.each([
-    ['public', 'anonymous', { kind: 'allow' }],
-    ['public', 'user', { kind: 'allow' }],
-    ['public', 'admin', { kind: 'allow' }],
     ['anonymous-only', 'anonymous', { kind: 'allow' }],
     ['anonymous-only', 'user', { kind: 'redirect', to: paths.forbidden }],
     ['anonymous-only', 'admin', { kind: 'redirect', to: paths.apps }],

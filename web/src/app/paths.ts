@@ -20,15 +20,10 @@ export type KnownPath = (typeof paths)[keyof typeof paths]
  * paths they pair with.
  */
 export const routeIds = {
-  landing: '/',
-  public: `/public`,
   signIn: `/public${paths.signIn}`,
   signUp: `/public${paths.signUp}`,
-  console: '/console',
-  consoleIndex: `/console${paths.console}`,
   apps: `/console${paths.apps}`,
   settings: `/console${paths.settings}`,
-  forbidden: `/console${paths.forbidden}`,
 } as const
 
 export const WORKER_ROUTES = {
