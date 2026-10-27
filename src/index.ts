@@ -48,7 +48,7 @@ type SignedRequest =
   | { ok: true; config: AppConfig; body: Uint8Array }
   | { ok: false; response: Response }
 
-async function requestLogger(c: AppContext, next: Next): Promise<void> {
+export async function requestLogger(c: AppContext, next: Next): Promise<void> {
   const startedAt = Date.now()
   await next()
   const fields = {

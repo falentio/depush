@@ -1,7 +1,7 @@
 import { exports } from 'cloudflare:workers'
 import * as v from 'valibot'
 import { afterEach, beforeAll, describe, expect, it } from 'vitest'
-import app from '../src/index'
+import app, { requestLogger } from '../src/index'
 import { hmacHex, md5Hex, signingString } from '../src/signature'
 
 const ORIGIN = 'http://depush.test'
@@ -148,7 +148,7 @@ describe('admin gate', () => {
 
     expect(middleware).toContain('/api/*')
     const catchAll = app.routes.find((route) => route.method === 'ALL' && route.path === '/*')
-    expect(catchAll?.handler.name).toBe('requestLogger')
+    expect(catchAll?.handler).toBe(requestLogger)
     expect((await request('/healthz')).status).toBe(200)
   })
 
