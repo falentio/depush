@@ -3,10 +3,10 @@ $ curl http://127.0.0.1:3001/healthz
 $ curl -X POST /api/auth/sign-up/email
   200 role=admin id=15KI9Xiv8yY3ckIOzfxuYZbQECha9hEf
 $ curl -X POST /api/apps
-  201 {"id":"na7kvuca","key":"0b46b91159cbf879588223143ce82d98","secret":"38dc980d6970c12b44590d70df62c803","name":"report flow","created_at":1793104145639}
+  201 {"id":"na7kvuca","key":"0b46b91159cbf879588223143ce82d98","secret":"[redacted]","name":"report flow","created_at":1793104145639}
 $ curl /api/apps
   200 [{"id":"na7kvuca","key":"0b46b91159cbf879588223143ce82d98","name":"report flow","created_at":1793104145639}]
 pusher-js subscribed to public-report with key 0b46b911…
-publish via secret 38dc980d… → received {"hello":"world"}
+publish via secret [redacted] → received {"hello":"world"}
 raw signed publish → 200 {}
 raw publish to unknown app id → 401 {"error":"Invalid app id"}
