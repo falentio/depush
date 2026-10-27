@@ -8,7 +8,8 @@
       "!**/.wrangler",
       "!**/pnpm-lock.yaml",
       "!**/assets",
-      "!orchestrate"
+      "!orchestrate",
+      "!**/public"
     ]
   },
   "formatter": {
@@ -35,6 +36,11 @@
       "source": {
         "organizeImports": "on"
       }
+    }
+  },
+  "css": {
+    "parser": {
+      "tailwindDirectives": true
     }
   }
 }

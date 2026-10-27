@@ -6,12 +6,15 @@ export default defineConfig({
     cloudflareTest({
       wrangler: { configPath: './wrangler.jsonc' },
       miniflare: {
-        bindings: { BETTER_AUTH_SECRET: 'test-better-auth-secret-value-0123456789' },
+        bindings: {
+          BETTER_AUTH_SECRET: 'test-better-auth-secret-value-0123456789',
+          BETTER_AUTH_URL: 'http://depush.test',
+        },
       },
     }),
   ],
   test: {
-    exclude: [...configDefaults.exclude, 'test/compat/**'],
+    exclude: [...configDefaults.exclude, 'test/compat/**', 'test/client/**'],
     // better-auth hashes passwords with scrypt, which takes seconds on a cold
     // workerd isolate.
     testTimeout: 30_000,

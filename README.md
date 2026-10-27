@@ -9,14 +9,15 @@ You point a client at your Worker instead of Pusher's edge, and your application
 signing the channel auth it already signs. There is no Pusher account in the path.
 
 Apps live in a Registry Durable Object, not in environment variables. The first account to sign up
-becomes the admin, and that admin creates apps through a small JSON API at `/api`. There is no
-dashboard UI.
+becomes the admin, and that admin creates apps through a small JSON API at `/api` or the admin
+console at `/console`.
 
 ## What it is not
 
-depush has no dashboard, teams, quotas, or billing. The protocol surface covers publish, batch
-publish, channel queries, presence, cache channels, and client events, plus two signed depush
-extensions for per-channel history and presence info. These are not implemented:
+depush has no teams, quotas, or billing, and the console is not a channel inspector. The protocol
+surface covers publish, batch publish, channel queries, presence, cache channels, and client
+events, plus two signed depush extensions for per-channel history and presence info. These are not
+implemented:
 
 - Webhooks.
 - Encrypted channels.
@@ -70,7 +71,7 @@ curl http://localhost:5173/healthz
 # {"status":"ok"}
 ```
 
-The first account you sign up becomes the admin. Create it, then use its session cookie to create
+The first account you create becomes the admin. Create it, then use its session cookie to create
 an app. better-auth requires an `Origin` header, so send one that matches the server:
 
 ```sh
@@ -130,6 +131,21 @@ const server = new PusherServer({
 await server.trigger('public-smoke', 'greeting', { hello: 'world' })
 ```
 
+## Admin console
+
+The Worker serves an installable admin console at `/console`. Open
+`http://localhost:5173/console` in development, or `https://<your-worker>/console` after deploying.
+
+The first account you create becomes the admin. The console lists apps, creates one with a
+one-time secret you can copy as a `.env` block, renames and deletes apps, and toggles sign-ups. A
+later account can sign in but lands on a page explaining that only an admin can manage apps.
+
+The console is a PWA. Install it from the browser's address bar, and it opens to an offline shell
+when the network is down. `BETTER_AUTH_URL` must match the origin that serves it: 5173 for
+`pnpm dev` and 4173 for `pnpm preview`. The console is deliberately small: no channel inspector,
+event publisher, presence viewer, audit log, teams, invites, password reset, email verification,
+or profile editing.
+
 ## Deploy
 
 Log in, then store the auth secret:
@@ -143,7 +159,8 @@ The value is any long random string, for example the output of `openssl rand -ba
 cookies are signed with it, so changing it signs every admin out.
 
 Apps are not Worker secrets. They live in the Registry Durable Object, and you create them through
-`/api/apps` after deploying, as in the Quickstart. An app's `id` is the id in the HTTP path,
+the console at `/console` or through `/api/apps` after deploying, as in the Quickstart. An app's
+`id` is the id in the HTTP path,
 `/apps/:appId/events`. Its `key` is the key the client connects with. Its `secret` signs HTTP
 requests and channel authorizations. Keep the secret on your app server, never in a client.
 
@@ -443,6 +460,12 @@ themselves out.
 | GET    | `/apps/:appId/channels/:channelName/history`  | signed request  | Per-channel history (depush extension) |
 | GET    | `/apps/:appId/channels/:channelName/presence` | signed request  | Live presence info (depush extension)  |
 
+Workers Assets serves the console. `run_worker_first` sends `/api`, `/api/*`, `/apps/*`, `/app/*`,
+and `/healthz` to the Worker, so those paths keep their JSON responses. The bare `/apps` path is not
+on that list. It returns the console shell as HTML with status 200 instead of the JSON 404 it
+returned before the console existed; use `/api/apps` for the app list, or `/apps/:appId/...` for a
+signed app route.
+
 Every `/apps` request carries the auth parameters the official SDK adds: `auth_key`,
 `auth_timestamp`, `auth_version=1.0`, and `auth_signature`. A request with a non-empty body also
 carries `body_md5`. The timestamp is a whole number of seconds, all digits, within 600 seconds of
@@ -588,14 +611,20 @@ to the Durable Object.
 
 ```sh
 pnpm check                              # Biome lint and format check
-pnpm typecheck                          # tsc --noEmit
-pnpm test                               # Vitest in workerd
+pnpm typecheck                          # tsc for the Worker and the console
+pnpm test                               # Vitest: workerd suite plus the pure client suite
+pnpm test:client                        # Pure console tests only
 pnpm test:compat                        # Node Vitest suite for the official pusher server SDK
 pnpm fuzz                               # Seeded HTTP and WebSocket fuzz run against a local server
-pnpm build                              # Vite build
+pnpm build                              # Vite build (Worker + client)
+pnpm verify:frontend                    # Build-output and preview checks, assumes pnpm build
 pnpm exec wrangler deploy --dry-run     # Check the deploy bundle and bindings
 pnpm compat                             # Run the official SDKs against a local server
 ```
+
+`pnpm verify:frontend` starts its own `vite preview` on 4173 and checks the SPA fallback, the
+Worker JSON routes, the service worker, the manifest, and the icons against the built output. It
+backs up `.dev.vars`, writes a test auth secret, and restores the file when the run ends.
 
 `pnpm compat` starts its own dev server and local auth server. It backs up `.dev.vars`, writes test
 values including `BETTER_AUTH_SECRET`, signs up the owner account, creates an app through

@@ -5,6 +5,10 @@
   "compatibility_date": "2026-10-26",
   "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
+  "assets": {
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api", "/api/*", "/apps/*", "/app/*", "/healthz"]
+  },
   "durable_objects": {
     "bindings": [
       { "name": "APP_HUB", "class_name": "AppHub" },
