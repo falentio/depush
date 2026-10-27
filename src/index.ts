@@ -1,9 +1,17 @@
+import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { verifyRequest } from './auth'
 import type { AppConfig } from './config'
 import { readConfig } from './config'
 import type { AppBindings } from './env'
-import { parseTrigger } from './events'
+import {
+  channelInfo,
+  channelList,
+  channelUsers,
+  parseBatch,
+  parseChannelInfo,
+  parseTrigger,
+} from './events'
 import { isWebSocketUpgrade, upgradeRejected } from './protocol'
 
 export { AppHub } from './hub'
@@ -14,10 +22,16 @@ const PUSHER_ERROR_PATH_NOT_FOUND = 4005
 const PUSHER_ERROR_UNSUPPORTED_PROTOCOL = 4007
 const PUSHER_ERROR_NO_PROTOCOL = 4008
 
+type AppContext = Context<{ Bindings: AppBindings }>
+
 type HandshakeRejection = {
   code: number
   message: string
 }
+
+type SignedRequest =
+  | { ok: true; config: AppConfig; body: Uint8Array }
+  | { ok: false; response: Response }
 
 const app = new Hono<{ Bindings: AppBindings }>()
 
@@ -34,23 +48,15 @@ app.get('/app/:key', (c) => {
 })
 
 app.post('/apps/:appId/events', async (c) => {
-  const config = readConfig(c.env)
-  if (c.req.param('appId') !== config.appId) {
-    return c.json({ error: 'Invalid app id' }, 401)
-  }
+  const signed = await signedRequest(c)
+  if (!signed.ok) return signed.response
 
-  const body = new Uint8Array(await c.req.raw.arrayBuffer())
-  const auth = await verifyRequest(c.req.raw, body, config, Math.floor(Date.now() / 1000))
-  if (!auth.ok) {
-    return c.json({ error: auth.error }, auth.status)
-  }
-
-  const parsed = parseTrigger(body)
+  const parsed = parseTrigger(signed.body)
   if (!parsed.ok) {
     return c.json({ error: parsed.error }, parsed.status)
   }
 
-  await c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId)).broadcast({
+  await appHub(c, signed.config).broadcast({
     name: parsed.trigger.name,
     data: parsed.trigger.data,
     channels: parsed.trigger.channels,
@@ -60,12 +66,92 @@ app.post('/apps/:appId/events', async (c) => {
   return c.json({})
 })
 
+app.post('/apps/:appId/batch_events', async (c) => {
+  const signed = await signedRequest(c)
+  if (!signed.ok) return signed.response
+
+  const parsed = parseBatch(signed.body)
+  if (!parsed.ok) {
+    return c.json({ error: parsed.error }, parsed.status)
+  }
+
+  const hub = appHub(c, signed.config)
+  for (const event of parsed.events) {
+    await hub.broadcast({
+      name: event.name,
+      data: event.data,
+      channels: [event.channel],
+      exceptSocketId: event.socketId,
+    })
+  }
+
+  return c.json({})
+})
+
+app.get('/apps/:appId/channels', async (c) => {
+  const signed = await signedRequest(c)
+  if (!signed.ok) return signed.response
+
+  const info = parseChannelInfo(c.req.query('info'))
+  if (!info.ok) return c.json({ error: info.error }, 400)
+
+  const snapshot = await appHub(c, signed.config).channelSnapshot()
+  const result = channelList(snapshot, c.req.query('filter_by_prefix'), info.info)
+  if (!result.ok) return c.json({ error: result.error }, 400)
+
+  return c.json(result.body)
+})
+
+app.get('/apps/:appId/channels/:channelName/users', async (c) => {
+  const signed = await signedRequest(c)
+  if (!signed.ok) return signed.response
+
+  const snapshot = await appHub(c, signed.config).channelSnapshot()
+  const result = channelUsers(snapshot, c.req.param('channelName'))
+  if (!result.ok) return c.json({ error: result.error }, 400)
+
+  return c.json(result.body)
+})
+
+app.get('/apps/:appId/channels/:channelName', async (c) => {
+  const signed = await signedRequest(c)
+  if (!signed.ok) return signed.response
+
+  const info = parseChannelInfo(c.req.query('info'))
+  if (!info.ok) return c.json({ error: info.error }, 400)
+
+  const snapshot = await appHub(c, signed.config).channelSnapshot()
+  const result = channelInfo(snapshot, c.req.param('channelName'), info.info)
+  if (!result.ok) return c.json({ error: result.error }, 400)
+
+  return c.json(result.body)
+})
+
 app.notFound((c) => {
   if (isWebSocketUpgrade(c.req.raw)) {
     return upgradeRejected(c.req.raw, PUSHER_ERROR_PATH_NOT_FOUND, 'Path not found')
   }
   return c.json({ error: 'Not found' }, 404)
 })
+
+function appHub(c: AppContext, config: AppConfig) {
+  return c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
+}
+
+async function signedRequest(c: AppContext): Promise<SignedRequest> {
+  const config = readConfig(c.env)
+  if (c.req.param('appId') !== config.appId) {
+    return { ok: false, response: c.json({ error: 'Invalid app id' }, 401) }
+  }
+
+  const body = new Uint8Array(await c.req.raw.arrayBuffer())
+  const auth = await verifyRequest(c.req.raw, body, config, Math.floor(Date.now() / 1000))
+  if (!auth.ok) {
+    return { ok: false, response: c.json({ error: auth.error }, auth.status) }
+  }
+
+  return { ok: true, config, body }
+}
 
 function handshakeRejection(
   key: string,
