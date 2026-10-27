@@ -23,6 +23,10 @@ export function SettingsPage() {
   const pending = write.state.status === 'pending'
 
   useEffect(() => {
+    setChecked(settings.signupEnabled)
+  }, [settings.signupEnabled])
+
+  useEffect(() => {
     if (!saved) return
     const timer = window.setTimeout(() => setSaved(false), 2000)
     return () => window.clearTimeout(timer)
