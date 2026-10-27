@@ -9,7 +9,7 @@ import { createAuth } from './session'
 
 type AdminEnv = {
   Bindings: AppBindings
-  Variables: { registry: DurableObjectStub<Registry> }
+  Variables: { registry: DurableObjectStub<Registry>; userId: string }
 }
 
 const createAppSchema = v.object({
@@ -46,7 +46,10 @@ adminRoutes.patch(
     const parsed = v.safeParse(settingsSchema, body)
     if (!parsed.success) return c.json({ error: 'signup_enabled must be a boolean' }, 400)
     const updated = await c.var.registry.updateSettings(parsed.output)
-    log.admin.info('settings_updated', { signupEnabled: parsed.output.signup_enabled })
+    log.admin.info('settings_updated', {
+      userId: c.var.userId,
+      signupEnabled: parsed.output.signup_enabled,
+    })
     return c.json(updated)
   }),
 )
@@ -63,7 +66,11 @@ adminRoutes.post(
 
     const created = await c.var.registry.createApp(parsed.output.name)
     if (created === null) return c.json({ error: 'Could not allocate an app id' }, 500)
-    log.admin.info('app_created', { appId: created.id, appName: created.name })
+    log.admin.info('app_created', {
+      userId: c.var.userId,
+      appId: created.id,
+      appName: created.name,
+    })
     return c.json(created, 201)
   }),
 )
@@ -78,7 +85,11 @@ adminRoutes.patch(
 
     const updated = await c.var.registry.updateApp(c.req.param('appId') ?? '', parsed.output.name)
     if (updated === null) return c.json({ error: 'App not found' }, 404)
-    log.admin.info('app_updated', { appId: updated.id, appName: updated.name })
+    log.admin.info('app_updated', {
+      userId: c.var.userId,
+      appId: updated.id,
+      appName: updated.name,
+    })
     return c.json(updated)
   }),
 )
@@ -98,7 +109,7 @@ adminRoutes.delete(
     const appId = c.req.param('appId') ?? ''
     const deleted = await c.var.registry.deleteApp(appId)
     if (!deleted) return c.json({ error: 'App not found' }, 404)
-    log.admin.info('app_deleted', { appId })
+    log.admin.info('app_deleted', { userId: c.var.userId, appId })
     return c.body(null, 204)
   }),
 )
@@ -122,6 +133,7 @@ function adminOnly(
         log.admin.warn('denied', { path: c.req.path, userId: session.user.id, status: 403 })
         return c.json({ error: 'Forbidden' }, 403)
       }
+      c.set('userId', session.user.id)
       await next()
     },
     async (c) => handler(c),
