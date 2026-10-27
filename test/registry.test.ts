@@ -147,7 +147,8 @@ describe('admin gate', () => {
       .map((route) => route.path)
 
     expect(middleware).toContain('/api/*')
-    expect(middleware).not.toContain('/*')
+    const catchAll = app.routes.find((route) => route.method === 'ALL' && route.path === '/*')
+    expect(catchAll?.handler.name).toBe('requestLogger')
     expect((await request('/healthz')).status).toBe(200)
   })
 

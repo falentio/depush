@@ -1,8 +1,9 @@
-import type { Context } from 'hono'
+import type { Context, Next } from 'hono'
 import { Hono } from 'hono'
 import { adminRoutes } from './admin'
 import { verifyRequest } from './auth'
 import { readBodyCapped } from './body'
+import { channelObjectName } from './channel'
 import type { AppConfig } from './config'
 import { appConfig, readSettings } from './config'
 import type { AppBindings } from './env'
@@ -15,6 +16,7 @@ import {
   parseHistoryQuery,
   parseTrigger,
 } from './events'
+import { log } from './logging'
 import {
   channelKind,
   isCacheChannel,
@@ -46,20 +48,47 @@ type SignedRequest =
   | { ok: true; config: AppConfig; body: Uint8Array }
   | { ok: false; response: Response }
 
+async function requestLogger(c: AppContext, next: Next): Promise<void> {
+  const startedAt = Date.now()
+  await next()
+  const fields = {
+    method: c.req.method,
+    path: c.req.path,
+    status: c.res.status,
+    durationMs: Date.now() - startedAt,
+  }
+  if (fields.status >= 500) log.request.error('request', fields)
+  else if (fields.status >= 400) log.request.warn('request', fields)
+  else log.request.debug('request', fields)
+}
+
 const app = new Hono<{ Bindings: AppBindings }>()
+
+app.use('*', requestLogger)
 
 app.route('/api', adminRoutes)
 
 app.get('/healthz', (c) => c.json({ status: 'ok' }))
 
 app.get('/app/:key', async (c) => {
-  const found = await registryStub(c.env).appByKey(c.req.param('key'))
+  const key = c.req.param('key')
+  const found = await registryStub(c.env).appByKey(key)
   if (found === null) {
+    log.request.warn('request_refused', {
+      appKey: key,
+      code: PUSHER_ERROR_NO_APP,
+      path: c.req.path,
+    })
     return upgradeRejected(c.req.raw, PUSHER_ERROR_NO_APP, 'Application does not exist')
   }
 
   const rejection = handshakeRejection(c.req.query('protocol'))
   if (rejection !== null) {
+    log.request.warn('request_refused', {
+      protocol: c.req.query('protocol') ?? 'none',
+      code: rejection.code,
+      path: c.req.path,
+    })
     return upgradeRejected(c.req.raw, rejection.code, rejection.message)
   }
 
@@ -75,6 +104,13 @@ app.post('/apps/:appId/events', async (c) => {
 
   const parsed = parseTrigger(signed.body, c.req.query('info'))
   if (!parsed.ok) {
+    log.request.warn('request_refused', {
+      appId: signed.config.appId,
+      method: c.req.method,
+      path: c.req.path,
+      status: parsed.status,
+      reason: parsed.error,
+    })
     return c.json({ error: parsed.error }, parsed.status)
   }
 
@@ -97,6 +133,13 @@ app.post('/apps/:appId/batch_events', async (c) => {
 
   const parsed = parseBatch(signed.body)
   if (!parsed.ok) {
+    log.request.warn('request_refused', {
+      appId: signed.config.appId,
+      method: c.req.method,
+      path: c.req.path,
+      status: parsed.status,
+      reason: parsed.error,
+    })
     return c.json({ error: parsed.error }, parsed.status)
   }
 
@@ -213,8 +256,14 @@ app.get('/apps/:appId/channels/:channelName', async (c) => {
   return c.json({ ...result.body, cache })
 })
 
+app.onError((error, c) => {
+  log.request.error('unhandled', { method: c.req.method, path: c.req.path, error })
+  return c.json({ error: 'Internal error' }, 500)
+})
+
 app.notFound((c) => {
   if (isWebSocketUpgrade(c.req.raw)) {
+    log.request.warn('request_refused', { code: PUSHER_ERROR_PATH_NOT_FOUND, path: c.req.path })
     return upgradeRejected(c.req.raw, PUSHER_ERROR_PATH_NOT_FOUND, 'Path not found')
   }
   return c.json({ error: 'Not found' }, 404)
@@ -225,22 +274,39 @@ function appHub(c: AppContext, config: AppConfig) {
 }
 
 function channelState(c: AppContext, config: AppConfig, channel: string) {
-  return c.env.CHANNEL.get(c.env.CHANNEL.idFromName(`${config.appId}:${channel}`))
+  return c.env.CHANNEL.get(c.env.CHANNEL.idFromName(channelObjectName(config.appId, channel)))
 }
 
 async function signedRequest(c: AppContext): Promise<SignedRequest> {
+  const method = c.req.method
+  const path = c.req.path
+
   const capped = await readBodyCapped(c.req.raw)
   if (!capped.ok) {
+    log.request.warn('request_refused', {
+      method,
+      path,
+      status: 413,
+      reason: 'body_too_large',
+    })
     return { ok: false, response: c.json({ error: 'Request body exceeds 256KB' }, 413) }
   }
 
   const appId = c.req.param('appId')
   if (appId === undefined) {
+    log.request.warn('request_refused', { method, path, status: 401, reason: 'missing_app_id' })
     return { ok: false, response: c.json({ error: 'Invalid app id' }, 401) }
   }
 
   const found = await registryStub(c.env).appById(appId)
   if (found === null) {
+    log.request.warn('request_refused', {
+      appId,
+      method,
+      path,
+      status: 401,
+      reason: 'unknown_app',
+    })
     return { ok: false, response: c.json({ error: 'Invalid app id' }, 401) }
   }
 
@@ -248,6 +314,13 @@ async function signedRequest(c: AppContext): Promise<SignedRequest> {
 
   const auth = await verifyRequest(c.req.raw, capped.body, config, Math.floor(Date.now() / 1000))
   if (!auth.ok) {
+    log.request.warn('request_refused', {
+      appId,
+      method,
+      path,
+      status: auth.status,
+      reason: auth.error,
+    })
     return { ok: false, response: c.json({ error: auth.error }, auth.status) }
   }
 
