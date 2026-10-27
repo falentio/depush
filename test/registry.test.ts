@@ -1,6 +1,7 @@
 import { exports } from 'cloudflare:workers'
 import * as v from 'valibot'
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import app from '../src/index'
 import { hmacHex, md5Hex, signingString } from '../src/signature'
 
 const ORIGIN = 'http://depush.test'
@@ -12,13 +13,18 @@ type Json = Record<string, unknown>
 
 const ADMIN_EMAIL = 'owner@example.com'
 
-let run = 0
-let adminCookie: string | null = null
+/**
+ * The pool shares one registry across a file, so the owner account is created
+ * once, before any test, and every other account gets a fresh email of its own.
+ */
+let admin: Client
 
-/** The pool shares one registry across a file, so every account needs its own email. */
-function nextEmail(prefix: string): string {
-  run += 1
-  return `${prefix}-${run}@example.com`
+beforeAll(async () => {
+  admin = await ensureAdmin()
+})
+
+function testEmail(prefix: string): string {
+  return `${prefix}-${crypto.randomUUID().slice(0, 8)}@example.com`
 }
 
 function request(path: string, init: RequestInit = {}) {
@@ -91,41 +97,38 @@ function readUser(body: unknown): AuthUser {
   }
 }
 
-async function attemptSignUp(email = nextEmail('user')) {
+async function attemptSignUp(email = testEmail('user')) {
   const response = await request(
     '/api/auth/sign-up/email',
     json({ email, password: PASSWORD, name: email }),
   )
   const body: unknown = await response.json()
-  const cookie = (response.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
-  return { client: { cookie }, status: response.status, body }
+  return { client: { cookie: cookieOf(response) }, status: response.status, body }
 }
 
-async function signUp(email = nextEmail('user')) {
+async function signUp(email = testEmail('user')) {
   const attempt = await attemptSignUp(email)
   return { ...attempt, user: readUser(attempt.body) }
 }
 
-/**
- * The pool shares one registry across the file, so the account that owns admin
- * is created once and every later test signs back in as it.
- */
-async function adminClient(): Promise<Client> {
-  if (adminCookie !== null) return { cookie: adminCookie }
+function cookieOf(response: Response): string {
+  return (response.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
+}
 
+/** Signs back in when the registry outlives the file, and claims admin when it does not. */
+async function ensureAdmin(): Promise<Client> {
   const response = await request(
     '/api/auth/sign-in/email',
     json({ email: ADMIN_EMAIL, password: PASSWORD }),
   )
   if (response.status === 200) {
-    adminCookie = (response.headers.get('set-cookie') ?? '').split(';')[0] ?? ''
-    expect(adminCookie).not.toBe('')
-    return { cookie: adminCookie }
+    const client = { cookie: cookieOf(response) }
+    expect(client.cookie).not.toBe('')
+    return client
   }
 
   const { client, user } = await signUp(ADMIN_EMAIL)
   expect(user.role).toBe('admin')
-  adminCookie = client.cookie
   return client
 }
 
@@ -137,41 +140,32 @@ async function createApp(client: Client, name: string) {
   return parsed.output
 }
 
-describe('the first account', () => {
-  it('becomes admin, and the setting starts enabled', async () => {
-    const { client, user } = await signUp(ADMIN_EMAIL)
-    expect(user.role).toBe('admin')
-    adminCookie = client.cookie
-
-    const settings = await as(client, '/api/settings')
-    expect(settings.status).toBe(200)
-    expect(await settings.json()).toEqual({ signup_enabled: true })
-  })
-
-  it('is followed by a plain user', async () => {
-    const { user } = await signUp()
-    expect(user.role).toBe('user')
-  })
-})
-
 describe('admin gate', () => {
+  it('runs the registry middleware only under /api', async () => {
+    const middleware = app.routes
+      .filter((route) => route.method === 'ALL')
+      .map((route) => route.path)
+
+    expect(middleware).toContain('/api/*')
+    expect(middleware).not.toContain('/*')
+    expect((await request('/healthz')).status).toBe(200)
+  })
+
   it('rejects an anonymous request with 401', async () => {
     expect((await request('/api/apps')).status).toBe(401)
     expect((await request('/api/settings')).status).toBe(401)
   })
 
   it('does not run the handler behind a rejected request', async () => {
-    const client = await adminClient()
-    const before = await readJsonList(client, '/api/apps')
+    const before = await readJsonList(admin, '/api/apps')
 
     const smuggled = await request('/api/apps', json({ name: 'smuggled' }))
     expect(smuggled.status).toBe(401)
 
-    expect(await readJsonList(client, '/api/apps')).toEqual(before)
+    expect(await readJsonList(admin, '/api/apps')).toEqual(before)
   })
 
   it('rejects a signed-in non-admin with 403', async () => {
-    await adminClient()
     const { client, user } = await signUp()
     expect(user.role).toBe('user')
 
@@ -183,34 +177,32 @@ describe('admin gate', () => {
 
 describe('app CRUD', () => {
   it('creates, lists, reads, and deletes an app', async () => {
-    const client = await adminClient()
-    const app = await createApp(client, 'round trip')
+    const app = await createApp(admin, 'round trip')
 
     expect(app.name).toBe('round trip')
     expect(String(app.id)).toMatch(/^[a-z0-9]{8}$/)
     expect(String(app.key)).toMatch(/^[0-9a-f]{32}$/)
     expect(String(app.secret)).toMatch(/^[0-9a-f]{32}$/)
 
-    const list = await readJsonList(client, '/api/apps')
+    const list = await readJsonList(admin, '/api/apps')
     const listed = list.find((entry) => entry.id === app.id)
     expect(listed).toBeDefined()
     expect(listed).not.toHaveProperty('secret')
 
-    const one = await readJsonObject(client, `/api/apps/${app.id}`)
+    const one = await readJsonObject(admin, `/api/apps/${app.id}`)
     expect(one).toEqual({ id: app.id, key: app.key, name: app.name, created_at: app.created_at })
     expect(one).not.toHaveProperty('secret')
 
-    expect((await as(client, `/api/apps/${app.id}`, { method: 'DELETE' })).status).toBe(204)
-    const afterDelete = await readJsonList(client, '/api/apps')
+    expect((await as(admin, `/api/apps/${app.id}`, { method: 'DELETE' })).status).toBe(204)
+    const afterDelete = await readJsonList(admin, '/api/apps')
     expect(afterDelete.some((entry) => entry.id === app.id)).toBe(false)
-    expect((await as(client, `/api/apps/${app.id}`)).status).toBe(404)
+    expect((await as(admin, `/api/apps/${app.id}`)).status).toBe(404)
   })
 
   it('renames an app and never returns its secret', async () => {
-    const client = await adminClient()
-    const app = await createApp(client, 'before')
+    const app = await createApp(admin, 'before')
 
-    const response = await as(client, `/api/apps/${app.id}`, {
+    const response = await as(admin, `/api/apps/${app.id}`, {
       ...json({ name: 'after' }),
       method: 'PATCH',
     })
@@ -220,23 +212,21 @@ describe('app CRUD', () => {
     expect(parsed.output.name).toBe('after')
     expect(parsed.output).not.toHaveProperty('secret')
 
-    expect((await readJsonObject(client, `/api/apps/${app.id}`)).name).toBe('after')
+    expect((await readJsonObject(admin, `/api/apps/${app.id}`)).name).toBe('after')
     expect(
-      (await as(client, '/api/apps/missing', { ...json({ name: 'after' }), method: 'PATCH' }))
+      (await as(admin, '/api/apps/missing', { ...json({ name: 'after' }), method: 'PATCH' }))
         .status,
     ).toBe(404)
   })
 
   it('rejects a blank name and an unknown app', async () => {
-    const client = await adminClient()
-    expect((await as(client, '/api/apps', json({ name: '   ' }))).status).toBe(400)
-    expect((await as(client, '/api/apps', json({}))).status).toBe(400)
-    expect((await as(client, '/api/apps/missing')).status).toBe(404)
+    expect((await as(admin, '/api/apps', json({ name: '   ' }))).status).toBe(400)
+    expect((await as(admin, '/api/apps', json({}))).status).toBe(400)
+    expect((await as(admin, '/api/apps/missing')).status).toBe(404)
   })
 
   it('issues distinct ids, keys, and secrets', async () => {
-    const client = await adminClient()
-    const apps = await Promise.all([1, 2, 3].map((index) => createApp(client, `gen-${index}`)))
+    const apps = await Promise.all([1, 2, 3].map((index) => createApp(admin, `gen-${index}`)))
 
     expect(new Set(apps.map((app) => app.id)).size).toBe(3)
     expect(new Set(apps.map((app) => app.key)).size).toBe(3)
@@ -245,10 +235,16 @@ describe('app CRUD', () => {
 })
 
 describe('signup toggle', () => {
-  it('refuses every sign-up once disabled', async () => {
-    const client = await adminClient()
+  afterEach(async () => {
+    await as(admin, '/api/settings', {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ signup_enabled: true }),
+    })
+  })
 
-    const patched = await as(client, '/api/settings', {
+  it('refuses every sign-up once disabled', async () => {
+    const patched = await as(admin, '/api/settings', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ signup_enabled: false }),
@@ -260,7 +256,7 @@ describe('signup toggle', () => {
     expect(refused.status).toBe(403)
     expect(refused.body).toMatchObject({ message: 'Sign-up is disabled' })
 
-    const enabled = await as(client, '/api/settings', {
+    const enabled = await as(admin, '/api/settings', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ signup_enabled: true }),
@@ -273,8 +269,7 @@ describe('signup toggle', () => {
   })
 
   it('rejects a non-boolean payload', async () => {
-    const client = await adminClient()
-    const response = await as(client, '/api/settings', {
+    const response = await as(admin, '/api/settings', {
       method: 'PATCH',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ signup_enabled: 'yes' }),
@@ -285,8 +280,7 @@ describe('signup toggle', () => {
 
 describe('an app created through the admin API', () => {
   it('publishes a signed event to a WebSocket connected with its key', async () => {
-    const client = await adminClient()
-    const app = await createApp(client, 'end to end')
+    const app = await createApp(admin, 'end to end')
 
     const response = await exports.default.fetch(`${ORIGIN}/app/${app.key}?protocol=7`, {
       headers: { upgrade: 'websocket' },
@@ -320,8 +314,7 @@ describe('an app created through the admin API', () => {
   })
 
   it('rejects a publish signed with the wrong secret', async () => {
-    const client = await adminClient()
-    const app = await createApp(client, 'wrong secret')
+    const app = await createApp(admin, 'wrong secret')
     const body = JSON.stringify({ name: 'x', channels: ['public-e2e'], data: '{}' })
 
     const published = await publish({ ...app, secret: 'f'.repeat(64) }, body)
