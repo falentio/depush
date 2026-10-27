@@ -16,12 +16,14 @@ const config: AppConfig = {
   activityTimeout: 120,
 }
 
-async function signedRequest(overrides: { signature?: string; timestamp?: number } = {}) {
+async function signedRequest(
+  overrides: { signature?: string; timestamp?: number; timestampRaw?: string } = {},
+) {
   const body = new TextEncoder().encode(WORKED_BODY)
   const timestamp = overrides.timestamp ?? TIMESTAMP
   const params = new URLSearchParams({
     auth_key: APP_KEY,
-    auth_timestamp: String(timestamp),
+    auth_timestamp: overrides.timestampRaw ?? String(timestamp),
     auth_version: '1.0',
     body_md5: md5Hex(body),
   })
@@ -53,6 +55,21 @@ describe('verifyRequest', () => {
     expect(await verifyRequest(request, body, config, TIMESTAMP + 601)).toMatchObject({
       status: 401,
     })
+  })
+
+  it('accepts an all-digit timestamp', async () => {
+    const { request, body } = await signedRequest({ timestampRaw: String(TIMESTAMP) })
+    expect(await verifyRequest(request, body, config, TIMESTAMP)).toEqual({ ok: true })
+  })
+
+  it('rejects a timestamp with trailing characters', async () => {
+    const { request, body } = await signedRequest({ timestampRaw: '123abc' })
+    expect(await verifyRequest(request, body, config, 123)).toMatchObject({ status: 401 })
+  })
+
+  it('rejects a negative timestamp', async () => {
+    const { request, body } = await signedRequest({ timestampRaw: '-1' })
+    expect(await verifyRequest(request, body, config, TIMESTAMP)).toMatchObject({ status: 401 })
   })
 
   it('rejects a body that does not match body_md5', async () => {

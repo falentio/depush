@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest'
 import type { PresenceMember } from '../src/protocol'
 import {
   channelKind,
+  isOversizedFrame,
+  isValidChannelName,
+  MAX_CHANNEL_NAME,
+  MAX_FRAME_BYTES,
   memberAdded,
   memberRemoved,
   parseFrame,
@@ -60,6 +64,44 @@ describe('parseFrame', () => {
 
   it('rejects subscribe without a channel', () => {
     expect(parseFrame('{"event":"pusher:subscribe","data":{}}')).toEqual({ ok: false })
+  })
+})
+
+describe('channel names', () => {
+  it('accepts the official charset', () => {
+    for (const name of ['news', 'private-room', 'presence-room', 'a_b=c@d,e.f;g', 'A-1']) {
+      expect(isValidChannelName(name)).toBe(true)
+    }
+  })
+
+  it('accepts 200 characters and rejects 201', () => {
+    expect(isValidChannelName('a'.repeat(MAX_CHANNEL_NAME))).toBe(true)
+    expect(isValidChannelName('a'.repeat(MAX_CHANNEL_NAME + 1))).toBe(false)
+  })
+
+  it('rejects empty and out-of-charset names', () => {
+    for (const name of ['', 'news room', 'news/room', 'news?', 'café', 'news😀']) {
+      expect(isValidChannelName(name)).toBe(false)
+    }
+  })
+
+  it('rejects a subscribe frame with an invalid channel name', () => {
+    expect(
+      parseFrame(JSON.stringify({ event: 'pusher:subscribe', data: { channel: 'news room' } })),
+    ).toEqual({ ok: false })
+  })
+})
+
+describe('frame size', () => {
+  it('allows exactly 64 KiB and rejects one more byte', () => {
+    expect(isOversizedFrame('x'.repeat(MAX_FRAME_BYTES))).toBe(false)
+    expect(isOversizedFrame('x'.repeat(MAX_FRAME_BYTES + 1))).toBe(true)
+  })
+
+  it('measures UTF-8 bytes, not code units', () => {
+    const frame = '€'.repeat(Math.ceil(MAX_FRAME_BYTES / 3))
+    expect(frame.length).toBeLessThan(MAX_FRAME_BYTES)
+    expect(isOversizedFrame(frame)).toBe(true)
   })
 })
 

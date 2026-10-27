@@ -13,6 +13,7 @@ import {
   clientEventFrame,
   connectionEstablished,
   errorFrame,
+  isOversizedFrame,
   isWebSocketUpgrade,
   memberAdded,
   memberRemoved,
@@ -134,6 +135,11 @@ export class AppHub extends DurableObject<AppBindings> {
       return
     }
 
+    if (isOversizedFrame(message)) {
+      socket.send(errorFrame('Message exceeds 64KB', PUSHER_ERROR_BAD_MESSAGE))
+      return
+    }
+
     const parsed = parseFrame(message)
     if (!parsed.ok) {
       socket.send(errorFrame('Invalid message', PUSHER_ERROR_BAD_MESSAGE))
@@ -158,9 +164,7 @@ export class AppHub extends DurableObject<AppBindings> {
     }
   }
 
-  override webSocketClose(socket: WebSocket, code: number, reason: string): void {
-    socket.close(code, reason)
-
+  override webSocketClose(socket: WebSocket): void {
     const state = readSocketState(socket)
     if (state === null) return
 

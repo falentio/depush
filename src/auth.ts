@@ -40,11 +40,13 @@ export async function verifyRequest(
     return unauthorized('Invalid auth_version')
   }
 
-  const timestamp = Number.parseInt(params.get('auth_timestamp') ?? '', 10)
-  if (
-    !Number.isFinite(timestamp) ||
-    Math.abs(nowSeconds - timestamp) > MAX_TIMESTAMP_SKEW_SECONDS
-  ) {
+  const timestampParam = params.get('auth_timestamp')
+  if (timestampParam === null || !/^\d+$/.test(timestampParam)) {
+    return unauthorized('Invalid auth_timestamp')
+  }
+
+  const timestamp = Number(timestampParam)
+  if (Math.abs(nowSeconds - timestamp) > MAX_TIMESTAMP_SKEW_SECONDS) {
     return unauthorized('Invalid auth_timestamp')
   }
 

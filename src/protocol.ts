@@ -21,6 +21,12 @@ export type ClientEventBroadcast = {
 
 export const CLIENT_EVENT_PREFIX = 'client-'
 export const MAX_EVENT_NAME = 200
+export const MAX_CHANNEL_NAME = 200
+export const MAX_FRAME_BYTES = 64 * 1024
+
+const channelNamePattern = new RegExp(`^[A-Za-z0-9_=@,.;-]{1,${MAX_CHANNEL_NAME}}$`)
+
+const encoder = new TextEncoder()
 
 export type ChannelKind = 'public' | 'private' | 'presence' | 'encrypted'
 
@@ -31,13 +37,24 @@ export type PresenceMember = {
 
 export type FrameParse = { ok: true; frame: ClientFrame } | { ok: false }
 
-const channelName = v.pipe(v.string(), v.minLength(1))
+export const channelNameSchema = v.pipe(
+  v.string(),
+  v.regex(channelNamePattern, 'Invalid channel name'),
+)
+
+export function isValidChannelName(name: string): boolean {
+  return v.safeParse(channelNameSchema, name).success
+}
+
+export function isOversizedFrame(frame: string): boolean {
+  return encoder.encode(frame).byteLength > MAX_FRAME_BYTES
+}
 
 const envelopeSchema = v.object({ event: v.string() })
 
 const clientFrameSchema = v.object({
   event: v.pipe(v.string(), v.startsWith(CLIENT_EVENT_PREFIX), v.maxLength(MAX_EVENT_NAME)),
-  channel: channelName,
+  channel: channelNameSchema,
   data: v.optional(v.unknown()),
 })
 
@@ -47,14 +64,14 @@ const frameSchema = v.variant('event', [
   v.object({
     event: v.literal('pusher:subscribe'),
     data: v.object({
-      channel: channelName,
+      channel: channelNameSchema,
       auth: v.optional(v.string()),
       channel_data: v.optional(v.string()),
     }),
   }),
   v.object({
     event: v.literal('pusher:unsubscribe'),
-    data: v.object({ channel: channelName }),
+    data: v.object({ channel: channelNameSchema }),
   }),
 ])
 

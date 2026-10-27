@@ -1,6 +1,6 @@
 import * as v from 'valibot'
 import type { ChannelKind } from './protocol'
-import { channelKind, MAX_EVENT_NAME } from './protocol'
+import { channelKind, channelNameSchema, MAX_EVENT_NAME } from './protocol'
 
 export const MAX_DATA_BYTES = 10 * 1024
 export const MAX_CHANNELS = 100
@@ -59,7 +59,6 @@ export type ChannelUsersResult =
   | { ok: true; body: { users: { id: string }[] } }
   | { ok: false; error: string }
 
-const channelName = v.pipe(v.string(), v.minLength(1))
 const eventName = v.pipe(v.string(), v.minLength(1), v.maxLength(MAX_EVENT_NAME))
 const socketId = v.pipe(v.string(), v.regex(/^\d+\.\d+$/))
 
@@ -69,17 +68,19 @@ const eventFields = {
   socket_id: v.optional(socketId),
 }
 
+const triggerFields = { ...eventFields, info: v.optional(v.unknown()) }
+
 const triggerSchema = v.union([
   v.object({
-    ...eventFields,
-    channels: v.pipe(v.array(channelName), v.minLength(1), v.maxLength(MAX_CHANNELS)),
+    ...triggerFields,
+    channels: v.pipe(v.array(channelNameSchema), v.minLength(1), v.maxLength(MAX_CHANNELS)),
   }),
-  v.object({ ...eventFields, channel: channelName }),
+  v.object({ ...triggerFields, channel: channelNameSchema }),
 ])
 
 const batchEventSchema = v.object({
   ...eventFields,
-  channel: channelName,
+  channel: channelNameSchema,
   info: v.optional(v.unknown()),
 })
 
@@ -92,7 +93,11 @@ const INFO_ATTRIBUTES = new Map<string, 'userCount' | 'subscriptionCount'>([
   ['subscription_count', 'subscriptionCount'],
 ])
 
-export function parseTrigger(body: Uint8Array): TriggerResult {
+export function parseTrigger(body: Uint8Array, infoQuery: string | undefined): TriggerResult {
+  if (infoQuery !== undefined) {
+    return invalid('Single-event info is not supported')
+  }
+
   let json: unknown
   try {
     json = JSON.parse(new TextDecoder().decode(body))
@@ -105,17 +110,26 @@ export function parseTrigger(body: Uint8Array): TriggerResult {
     return invalid('Invalid event payload')
   }
 
-  if (dataBytes(parsed.output.data) > MAX_DATA_BYTES) {
+  const event = parsed.output
+  if (event.info !== undefined) {
+    return invalid('Single-event info is not supported')
+  }
+
+  const channels = 'channels' in event ? event.channels : [event.channel]
+  if (channels.some((channel) => channelKind(channel) === 'encrypted')) {
+    return invalid('Encrypted channels are not supported')
+  }
+
+  if (dataBytes(event.data) > MAX_DATA_BYTES) {
     return { ok: false, status: 413, error: 'Event data exceeds 10KB' }
   }
 
-  const event = parsed.output
   return {
     ok: true,
     trigger: {
       name: event.name,
       data: event.data,
-      channels: 'channels' in event ? event.channels : [event.channel],
+      channels,
       socketId: event.socket_id,
     },
   }

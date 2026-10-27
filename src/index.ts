@@ -1,6 +1,7 @@
 import type { Context } from 'hono'
 import { Hono } from 'hono'
 import { verifyRequest } from './auth'
+import { readBodyCapped } from './body'
 import type { AppConfig } from './config'
 import { readConfig } from './config'
 import type { AppBindings } from './env'
@@ -12,7 +13,7 @@ import {
   parseChannelInfo,
   parseTrigger,
 } from './events'
-import { isWebSocketUpgrade, upgradeRejected } from './protocol'
+import { isValidChannelName, isWebSocketUpgrade, upgradeRejected } from './protocol'
 
 export { AppHub } from './hub'
 
@@ -51,7 +52,7 @@ app.post('/apps/:appId/events', async (c) => {
   const signed = await signedRequest(c)
   if (!signed.ok) return signed.response
 
-  const parsed = parseTrigger(signed.body)
+  const parsed = parseTrigger(signed.body, c.req.query('info'))
   if (!parsed.ok) {
     return c.json({ error: parsed.error }, parsed.status)
   }
@@ -95,8 +96,13 @@ app.get('/apps/:appId/channels', async (c) => {
   const info = parseChannelInfo(c.req.query('info'))
   if (!info.ok) return c.json({ error: info.error }, 400)
 
+  const prefix = c.req.query('filter_by_prefix')
+  if (prefix !== undefined && !isValidChannelName(prefix)) {
+    return c.json({ error: 'Invalid channel name' }, 400)
+  }
+
   const snapshot = await appHub(c, signed.config).channelSnapshot()
-  const result = channelList(snapshot, c.req.query('filter_by_prefix'), info.info)
+  const result = channelList(snapshot, prefix, info.info)
   if (!result.ok) return c.json({ error: result.error }, 400)
 
   return c.json(result.body)
@@ -106,8 +112,13 @@ app.get('/apps/:appId/channels/:channelName/users', async (c) => {
   const signed = await signedRequest(c)
   if (!signed.ok) return signed.response
 
+  const channelName = c.req.param('channelName')
+  if (!isValidChannelName(channelName)) {
+    return c.json({ error: 'Invalid channel name' }, 400)
+  }
+
   const snapshot = await appHub(c, signed.config).channelSnapshot()
-  const result = channelUsers(snapshot, c.req.param('channelName'))
+  const result = channelUsers(snapshot, channelName)
   if (!result.ok) return c.json({ error: result.error }, 400)
 
   return c.json(result.body)
@@ -117,11 +128,16 @@ app.get('/apps/:appId/channels/:channelName', async (c) => {
   const signed = await signedRequest(c)
   if (!signed.ok) return signed.response
 
+  const channelName = c.req.param('channelName')
+  if (!isValidChannelName(channelName)) {
+    return c.json({ error: 'Invalid channel name' }, 400)
+  }
+
   const info = parseChannelInfo(c.req.query('info'))
   if (!info.ok) return c.json({ error: info.error }, 400)
 
   const snapshot = await appHub(c, signed.config).channelSnapshot()
-  const result = channelInfo(snapshot, c.req.param('channelName'), info.info)
+  const result = channelInfo(snapshot, channelName, info.info)
   if (!result.ok) return c.json({ error: result.error }, 400)
 
   return c.json(result.body)
@@ -139,18 +155,22 @@ function appHub(c: AppContext, config: AppConfig) {
 }
 
 async function signedRequest(c: AppContext): Promise<SignedRequest> {
+  const capped = await readBodyCapped(c.req.raw)
+  if (!capped.ok) {
+    return { ok: false, response: c.json({ error: 'Request body exceeds 256KB' }, 413) }
+  }
+
   const config = readConfig(c.env)
   if (c.req.param('appId') !== config.appId) {
     return { ok: false, response: c.json({ error: 'Invalid app id' }, 401) }
   }
 
-  const body = new Uint8Array(await c.req.raw.arrayBuffer())
-  const auth = await verifyRequest(c.req.raw, body, config, Math.floor(Date.now() / 1000))
+  const auth = await verifyRequest(c.req.raw, capped.body, config, Math.floor(Date.now() / 1000))
   if (!auth.ok) {
     return { ok: false, response: c.json({ error: auth.error }, auth.status) }
   }
 
-  return { ok: true, config, body }
+  return { ok: true, config, body: capped.body }
 }
 
 function handshakeRejection(
