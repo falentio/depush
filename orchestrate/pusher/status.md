@@ -1,10 +1,10 @@
 # Orchestrate status
 
-Generated: 2026-10-27T07:34:40.495Z
+Generated: 2026-10-27T07:48:37.697Z
 
 ## Units
 
-States: landed=6, ready=1
+States: landed=7
 
 | ID | Track | State | Branch | PR | SHA | Brief |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -14,11 +14,11 @@ States: landed=6, ready=1
 | u4-selfhost | docs | landed |  |  | 873bc0c79a8020651b7ec3b2984df190470d9460 | briefs/u4-selfhost.md |
 | u5-harden | server | landed |  |  | d9a3dbe | briefs/u5-harden.md |
 | u6-cache | server | landed | unit/u6-cache |  | ea9b33c | briefs/u6-cache.md |
-| u7-history-presence | server | ready |  |  |  | briefs/u7-history-presence.md |
+| u7-history-presence | server | landed | unit/u7-history-presence |  | 447f10a | briefs/u7-history-presence.md |
 
 ## Verification ledger
 
-Verdicts: unit-test-verified=6
+Verdicts: unit-test-verified=7
 
 | PR | SHA | Verdict | Evidence | Verifier | Timestamp |
 | --- | --- | --- | --- | --- | --- |
@@ -28,6 +28,7 @@ Verdicts: unit-test-verified=6
 | 0 | 873bc0c79a8020651b7ec3b2984df190470d9460 | unit-test-verified | u4-selfhost: README operator manual; DO new_sqlite_classes; nodejs_compat removed; compat 18/18; 66 tests; cf-typegen clean | coordinator | 2026-10-27T06:20:00Z |
 | 0 | d9a3dbe | unit-test-verified | u5-harden: compat 28/28 incl raw 4001/4005/4007/4008/4009/4300/4301; tests 93/93; gates green | coordinator | 2026-10-27T06:20:00Z |
 | 0 | ea9b33c | unit-test-verified | u6-cache: per-channel Channel DO; compat 34/34 with official pusher-js 8.6 and pusher 5.3; tests 110/110; check, typecheck, build, dry-run green; cache survives DO eviction | coordinator | 2026-10-27T07:34:25Z |
+| 0 | 447f10a | unit-test-verified | u7-history-presence: per-channel history and live presence info; compat 40/40 official SDKs; tests 123/123; gates green; cache replay excluded from history; 24h/1000 retention | coordinator | 2026-10-27T07:48:12Z |
 
 ## Frontier
 
@@ -40,4 +41,4 @@ Lowest unmerged: none
 
 (none)
 
-<!-- orch-summary {"unitStates":{"landed":6,"ready":1},"ledgerVerdicts":{"unit-test-verified":6},"frontierGeneration":0,"openGateIds":[]} -->
+<!-- orch-summary {"unitStates":{"landed":7},"ledgerVerdicts":{"unit-test-verified":7},"frontierGeneration":0,"openGateIds":[]} -->

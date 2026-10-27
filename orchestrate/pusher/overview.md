@@ -47,9 +47,12 @@ Units:
 | id                  | track  | state   | outcome                                                           |
 | ------------------- | ------ | ------- | ----------------------------------------------------------------- |
 | u6-cache            | server | landed  | per-channel Channel DO, cache replay/miss, cache info, TTL        |
-| u7-history-presence | server | ready   | per-channel history API and live presence-info API on the same DO |
+| u7-history-presence | server | landed  | per-channel history API and live presence-info API on the same DO |
 
-Final verification will grow the compat harness to 40 checks and tag `v0.2.0`. No remote, no PRs.
+All v0.2 units landed. Final verification at `447f10a`: `pnpm check` 32 code files, `pnpm typecheck`,
+`pnpm test` 123/123, `pnpm build`, `pnpm exec wrangler deploy --dry-run`, and `pnpm compat` 40/40
+with official `pusher-js` 8.6 and `pusher` 5.3. Tag `v0.2.0` marks the landed state. No remote and
+no PRs.
 
 ## Close (v0.1.0)
 
