@@ -50,7 +50,6 @@ const landingRoute = createRoute({
 const publicRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'public',
-  beforeLoad: requireAccess('anonymous-only'),
   component: AuthLayout,
 })
 
@@ -58,12 +57,17 @@ const signInRoute = createRoute({
   getParentRoute: () => publicRoute,
   path: paths.signIn,
   validateSearch: signInSearchSchema,
+  beforeLoad: ({ context, location, search }) => {
+    if (context.auth.state === 'admin') throw redirect({ to: search.redirect })
+    requireAccess('anonymous-only')({ context, location })
+  },
   component: SignInPage,
 })
 
 const signUpRoute = createRoute({
   getParentRoute: () => publicRoute,
   path: paths.signUp,
+  beforeLoad: requireAccess('anonymous-only'),
   component: SignUpPage,
 })
 
