@@ -17,28 +17,28 @@ batch publish, channel queries, presence, and client events. These are not imple
 - Encrypted channels.
 - User signin and watchlists.
 - Connection termination.
-- Per-event batch `info`.
+- Publish `info`, on a single event or on a batch event.
 - Event history.
 
 ## Support
 
-| Capability                    | Status                                                         |
-| ----------------------------- | -------------------------------------------------------------- |
-| Public channels               | Supported                                                      |
-| Private channels              | Supported, with auth from your app server                      |
-| Presence channels             | Supported, with auth from your app server                      |
-| Client events                 | Supported on private and presence channels                     |
-| HTTP publish                  | Supported, with `socket_id` exclusion                          |
-| Batch publish                 | Supported, 1 to 10 events                                      |
-| Channel list and channel info | Supported, with `user_count` and `subscription_count`          |
-| Presence users                | Supported                                                      |
-| Webhooks                      | Not supported. The Worker makes no outbound calls.             |
-| Cache channels                | Not supported. A `cache-*` name is only a channel name.        |
-| Encrypted channels            | Not supported. A subscribe gets `pusher:error` 4009 and closes |
-| User signin, watchlists       | Not supported. `pusher:signin` fails parsing and gets 4300     |
-| Connection termination        | Not supported. The route returns 404                           |
-| Per-event batch `info`        | Not supported. The batch returns 400                           |
-| Event history                 | Not supported. `GET /apps/:appId/events` returns 404           |
+| Capability                    | Status                                                           |
+| ----------------------------- | ---------------------------------------------------------------- |
+| Public channels               | Supported                                                        |
+| Private channels              | Supported, with auth from your app server                        |
+| Presence channels             | Supported, with auth from your app server                        |
+| Client events                 | Supported on private and presence channels                       |
+| HTTP publish                  | Supported, with `socket_id` exclusion                            |
+| Batch publish                 | Supported, 1 to 10 events                                        |
+| Channel list and channel info | Supported, with `user_count` and `subscription_count`            |
+| Presence users                | Supported                                                        |
+| Webhooks                      | Not supported. The Worker makes no outbound calls.               |
+| Cache channels                | Not supported. A `cache-*` name is only a channel name.          |
+| Encrypted channels            | Not supported. Subscribe gets 4009; publish returns 400          |
+| User signin, watchlists       | Not supported. `pusher:signin` fails parsing and gets 4300       |
+| Connection termination        | Not supported. The route returns 404                             |
+| Publish `info`                | Not supported. A single event or a batch with `info` returns 400 |
+| Event history                 | Not supported. `GET /apps/:appId/events` returns 404             |
 
 ## Quickstart
 
@@ -255,16 +255,19 @@ close with code 4009.
 
 Every `/apps` request carries the auth parameters the official SDK adds: `auth_key`,
 `auth_timestamp`, `auth_version=1.0`, and `auth_signature`. A request with a non-empty body also
-carries `body_md5`. The timestamp must be within 600 seconds of the Worker's clock. The signature
-covers the method, the path, and the query string without `auth_signature`.
+carries `body_md5`. The timestamp is a whole number of seconds, all digits, within 600 seconds of
+the Worker's clock. The signature covers the method, the path, and the query string without
+`auth_signature`.
 
 Publish takes `name`, `data`, and either `channels` with up to 100 names or one `channel`, plus an
 optional `socket_id` to exclude. Send `data` as a string. The Node SDK serializes objects for you.
-The response is `{}`.
+The response is `{}`. A body over 256 KiB returns 413. A `private-encrypted-` channel returns 400,
+and so does `info`, whether the Node SDK puts it in the body or a client puts it in the query.
 
 Batch publish takes `{ "batch": [ { "channel": "...", "name": "...", "data": "..." } ] }` with 1
 to 10 events. Each item carries a singular `channel` and may set `socket_id`. One invalid event
-rejects the whole request with 400 before anything is broadcast. The response is `{}`.
+rejects the whole request with 400 before anything is broadcast, whether the payload, the channel
+name, an encrypted channel, or an `info` field is at fault. The response is `{}`.
 
 Channel list and info take two query parameters:
 
@@ -276,6 +279,9 @@ Channel list and info take two query parameters:
 `user_count` applies only to presence channels, and the list endpoint needs a `filter_by_prefix`
 that selects presence channels. `subscription_count` applies only to other channels. Asking for
 an attribute that does not apply returns 400, as does an unknown attribute such as `cache`.
+
+A channel name in the path, and `filter_by_prefix` when present, must follow the channel-name rule
+in Limits. A name outside it returns 400.
 
 Response shapes:
 
@@ -290,33 +296,35 @@ presence channels have one.
 
 ## Errors
 
-| Where           | Code   | Meaning                                                                                           |
-| --------------- | ------ | ------------------------------------------------------------------------------------------------- |
-| WebSocket close | `4001` | The `:key` does not match `PUSHER_APP_KEY`                                                        |
-| WebSocket close | `4005` | The upgrade path is not a route                                                                   |
-| WebSocket close | `4007` | The `protocol` parameter is present but not `7`                                                   |
-| WebSocket close | `4008` | The `protocol` parameter is missing                                                               |
-| WebSocket close | `4009` | Channel auth failed, or the channel is `private-encrypted-`                                       |
-| `pusher:error`  | `4300` | A bad frame, a client event on a channel you do not own, or data over 10 KB                       |
-| `pusher:error`  | `4301` | More than 10 client events in one second                                                          |
-| HTTP            | `400`  | Invalid JSON or payload, unsupported `info`, batch `info`, or a plain HTTP request to `/app/:key` |
-| HTTP            | `401`  | Wrong app id in the path, `auth_key`, `auth_version`, timestamp, `body_md5`, or signature         |
-| HTTP            | `413`  | Event data over 10,240 bytes                                                                      |
+| Where           | Code   | Meaning                                                                                                                                |
+| --------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
+| WebSocket close | `4001` | The `:key` does not match `PUSHER_APP_KEY`                                                                                             |
+| WebSocket close | `4005` | The upgrade path is not a route                                                                                                        |
+| WebSocket close | `4007` | The `protocol` parameter is present but not `7`                                                                                        |
+| WebSocket close | `4008` | The `protocol` parameter is missing                                                                                                    |
+| WebSocket close | `4009` | Channel auth failed, or the channel is `private-encrypted-`                                                                            |
+| `pusher:error`  | `4300` | A bad frame, an invalid channel name, a text frame over 64 KiB, a client event on a channel you do not own, or data over 10 KB         |
+| `pusher:error`  | `4301` | More than 10 client events in one second                                                                                               |
+| HTTP            | `400`  | Invalid JSON, payload, event name, or channel name; publish `info`; unsupported `info`; or a plain HTTP request to `/app/:key`         |
+| HTTP            | `401`  | Wrong app id in the path, `auth_key`, `auth_version`, a timestamp that is not all digits or is outside 600 s, `body_md5`, or signature |
+| HTTP            | `413`  | Event data over 10,240 bytes, or a request body over 256 KiB                                                                           |
 
 A channel auth failure sends `pusher:error` 4009 and then closes the socket with 4009. The 4300
 and 4301 errors leave the connection open.
 
 ## Limits
 
-| Limit                    | Value                  |
-| ------------------------ | ---------------------- |
-| Event data               | 10,240 bytes of UTF-8  |
-| Channels per publish     | 100                    |
-| Events per batch         | 10                     |
-| Client events per socket | 10 per rolling 1000 ms |
-| Event name               | 200 characters         |
-| Channel name             | Non-empty string       |
-| Apps per deployment      | 1                      |
+| Limit                    | Value                                           |
+| ------------------------ | ----------------------------------------------- |
+| Event data               | 10,240 bytes of UTF-8                           |
+| HTTP request body        | 262,144 bytes                                   |
+| WebSocket text frame     | 65,536 bytes of UTF-8, then `pusher:error` 4300 |
+| Channels per publish     | 100                                             |
+| Events per batch         | 10                                              |
+| Client events per socket | 10 per rolling 1000 ms                          |
+| Event name               | 200 characters                                  |
+| Channel name             | 1 to 200 of `A-Za-z0-9_-=@,.;`                  |
+| Apps per deployment      | 1                                               |
 
 Presence state lives in the live sockets. It is gone when the last socket leaves and the Durable
 Object is evicted, and nothing replays it.
@@ -393,13 +401,15 @@ The signed HTTP path and the socket path meet at the same `AppHub` instance, who
 
 ## Troubleshooting
 
-| Symptom                                    | Cause                                          | Fix                                                                                                    |
-| ------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Close `4001`, "Application does not exist" | The client key is not `PUSHER_APP_KEY`         | Use the key from the same app as the Worker                                                            |
-| Close `4008`                               | No `protocol` query parameter                  | Use official `pusher-js`, or add `protocol=7`. A proxy can strip the query                             |
-| Close `4007`                               | The protocol is not `7`                        | Use `pusher-js` 8.x, which sends `7`                                                                   |
-| Close `4009`                               | Channel auth rejected, or an encrypted channel | Sign `socket_id:channel`, check the key and secret, and send back the exact `channel_data`             |
-| HTTP `401`                                 | A signed request did not verify                | Check `auth_key`, the clock skew against 600 s, `body_md5`, and the signed path and query              |
-| `pusher:error` `4301`                      | More than 10 client events in one second       | Send fewer, or batch them on the server                                                                |
-| HTTP `404`                                 | Route not implemented                          | Terminate connections and event history do not exist                                                   |
-| `pusher:error` `4300`, "Invalid message"   | Unknown frame, such as `pusher:signin`         | Send only `pusher:subscribe`, `pusher:unsubscribe`, `pusher:ping`, `pusher:pong`, or `client-*` frames |
+| Symptom                                       | Cause                                                              | Fix                                                                                                                                             |
+| --------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Close `4001`, "Application does not exist"    | The client key is not `PUSHER_APP_KEY`                             | Use the key from the same app as the Worker                                                                                                     |
+| Close `4008`                                  | No `protocol` query parameter                                      | Use official `pusher-js`, or add `protocol=7`. A proxy can strip the query                                                                      |
+| Close `4007`                                  | The protocol is not `7`                                            | Use `pusher-js` 8.x, which sends `7`                                                                                                            |
+| Close `4009`                                  | Channel auth rejected, or an encrypted channel                     | Sign `socket_id:channel`, check the key and secret, and send back the exact `channel_data`                                                      |
+| HTTP `401`                                    | A signed request did not verify                                    | Check `auth_key`, the clock skew against 600 s, `body_md5`, and the signed path and query                                                       |
+| `pusher:error` `4301`                         | More than 10 client events in one second                           | Send fewer, or batch them on the server                                                                                                         |
+| HTTP `404`                                    | Route not implemented                                              | Terminate connections and event history do not exist                                                                                            |
+| `pusher:error` `4300`, "Invalid message"      | Unknown frame, such as `pusher:signin`, or an invalid channel name | Send only `pusher:subscribe`, `pusher:unsubscribe`, `pusher:ping`, `pusher:pong`, or `client-*` frames, on a channel that follows the name rule |
+| `pusher:error` `4300`, "Message exceeds 64KB" | A text frame over 64 KiB                                           | Keep each frame under 64 KiB                                                                                                                    |
+| HTTP `413`                                    | The body is over 256 KiB, or the data over 10 KB                   | Send less data, or split the batch                                                                                                              |
