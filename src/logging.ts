@@ -7,7 +7,8 @@ import {
   isLogLevel,
 } from '@logtape/logtape'
 
-const level = isLogLevel(env.LOG_LEVEL) ? env.LOG_LEVEL : 'info'
+const configured: string = env.LOG_LEVEL
+const level = isLogLevel(configured) ? configured : 'info'
 
 configureSync({
   sinks: { console: getConsoleSink({ formatter: getJsonLinesFormatter() }) },
@@ -29,4 +30,5 @@ export const log = {
   channel: getLogger(['depush', 'channel']),
 }
 
+if (configured !== level) log.root.warn('log_level_invalid', { value: configured })
 log.root.info('ready', { level })
