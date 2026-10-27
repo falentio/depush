@@ -22,7 +22,12 @@ export function useCommand<A extends unknown[], T>(command: (...args: A) => Prom
       try {
         const value = await command(...args)
         setState({ status: 'succeeded', value })
-        await router.invalidate()
+        try {
+          await router.invalidate()
+        } catch {
+          // A failed refresh must not replace a value the server will not send
+          // again, such as a new app's secret.
+        }
         return true
       } catch (error) {
         setState({ status: 'failed', error: toApiError(error) })
