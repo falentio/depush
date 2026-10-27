@@ -103,6 +103,7 @@ export function ErrorPanel({
 
 export function OfflineScreen({ error, onRetry }: { error: ApiError; onRetry: () => void }) {
   const copy = errorCopy(error)
+  const reload = copy.action === 'reload'
 
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center gap-6 bg-background px-4">
@@ -113,9 +114,13 @@ export function OfflineScreen({ error, onRetry }: { error: ApiError; onRetry: ()
         </div>
         <h1 className="mt-4 text-lg font-semibold">{copy.title}</h1>
         <p className="mt-2 text-sm text-muted-foreground">{copy.description}</p>
-        <Button type="button" className="mt-5" onClick={onRetry}>
+        <Button
+          type="button"
+          className="mt-5"
+          onClick={reload ? () => window.location.reload() : onRetry}
+        >
           <RefreshCwIcon />
-          Try again
+          {reload ? 'Reload' : 'Try again'}
         </Button>
       </div>
     </main>
