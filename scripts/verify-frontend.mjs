@@ -3,6 +3,7 @@ import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { setTimeout as delay } from 'node:timers/promises'
 import { fileURLToPath } from 'node:url'
+import { WORKER_PREFIXES } from '../web/src/app/paths.ts'
 import { RUN_WORKER_FIRST } from '../web/src/app/worker-routes.ts'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
@@ -147,8 +148,10 @@ async function checkBuildOutput() {
   assert(sw.includes('index.html'), 'sw.js does not precache index.html')
   assert(/assets\/index-[A-Za-z0-9_-]+\.js/.test(sw), 'sw.js does not precache the JS asset')
   assert(!/url:"\/api/.test(sw), 'sw.js precaches an /api path')
-  assert(sw.includes('^\\/api'), 'sw.js navigation denylist is missing /api')
-  assert(sw.includes('^\\/healthz'), 'sw.js navigation denylist is missing /healthz')
+  for (const prefix of WORKER_PREFIXES) {
+    const pattern = `^${prefix.replaceAll('/', '\\/')}`
+    assert(sw.includes(pattern), `sw.js navigation denylist is missing ${prefix}`)
+  }
 
   const generated = JSON.parse(await readFile(`${ROOT}dist/depush/wrangler.json`, 'utf8'))
   assert(generated.main === 'index.js', 'generated wrangler main is not index.js')
