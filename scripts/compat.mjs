@@ -173,6 +173,37 @@ function waitForEvent(binder, event, label, timeoutMs = 10_000) {
   })
 }
 
+function waitForEventWithMetadata(binder, event, label, timeoutMs = 10_000) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      binder.unbind(event)
+      reject(new Error(`Timed out waiting for ${label}`))
+    }, timeoutMs)
+    binder.bind(event, (data, metadata) => {
+      clearTimeout(timer)
+      binder.unbind(event)
+      resolve({ data, metadata })
+    })
+  })
+}
+
+function waitForPusherError(client, code, label, timeoutMs = 10_000) {
+  const connection = client.connection
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      connection.unbind('error', handler)
+      reject(new Error(`Timed out waiting for ${label}`))
+    }, timeoutMs)
+    const handler = (event) => {
+      if (event?.type !== 'PusherError' || event.data?.code !== code) return
+      clearTimeout(timer)
+      connection.unbind('error', handler)
+      resolve(event)
+    }
+    connection.bind('error', handler)
+  })
+}
+
 async function subscribe(client) {
   const channel = client.subscribe(CHANNEL)
   await waitForEvent(channel, 'pusher:subscription_succeeded', `subscription on ${CHANNEL}`)
@@ -347,6 +378,157 @@ async function checkChannelIsolation(server, bobChannel, publicChannel, privateC
   assert.equal(leaked, false, 'public-only client received a private event')
 }
 
+async function checkPrivateClientEvent(port, authPort, senderChannel) {
+  const receiverClient = createClient(port, authPort, 'bob')
+  clients.push(receiverClient)
+  const receiverChannel = receiverClient.subscribe(PRIVATE_CHANNEL)
+  await waitForEvent(receiverChannel, 'pusher:subscription_succeeded', 'bob private subscription')
+
+  let senderReceived = false
+  senderChannel.bind('client-typing', () => {
+    senderReceived = true
+  })
+
+  const received = waitForEvent(receiverChannel, 'client-typing', 'client-typing on the receiver')
+  senderChannel.trigger('client-typing', { typing: true })
+  assert.deepEqual(await received, { typing: true })
+  await delay(300)
+  assert.equal(senderReceived, false, 'the sender received its own client event')
+  return receiverChannel
+}
+
+async function checkPresenceClientEvent(port, authPort, senderChannel, senderUserId) {
+  const receiverClient = createClient(port, authPort, 'carol')
+  clients.push(receiverClient)
+  const receiverChannel = receiverClient.subscribe(PRESENCE_CHANNEL)
+  await waitForEvent(
+    receiverChannel,
+    'pusher:subscription_succeeded',
+    'carol presence subscription',
+  )
+
+  const received = waitForEventWithMetadata(
+    receiverChannel,
+    'client-typing',
+    'presence client event',
+  )
+  senderChannel.trigger('client-typing', { typing: true })
+
+  const { data, metadata } = await received
+  assert.deepEqual(data, { typing: true })
+  assert.equal(metadata.user_id, senderUserId)
+  return receiverChannel
+}
+
+async function checkPublicClientEventRejected(senderChannel, otherChannel) {
+  let delivered = false
+  otherChannel.bind('client-nope', () => {
+    delivered = true
+  })
+
+  const error = waitForPusherError(senderChannel.pusher, 4300, 'a 4300 rejection')
+  senderChannel.trigger('client-nope', { n: 1 })
+
+  const event = await error
+  assert.equal(event.type, 'PusherError')
+  assert.equal(event.data.code, 4300)
+  await delay(300)
+  assert.equal(delivered, false, 'a public channel client event was delivered')
+  assert.equal(senderChannel.pusher.connection.state, 'connected')
+}
+
+async function checkClientEventRateLimit(port, authPort, receiverChannel) {
+  const senderClient = createClient(port, authPort, 'alice')
+  clients.push(senderClient)
+  const senderChannel = senderClient.subscribe(PRIVATE_CHANNEL)
+  await waitForEvent(senderChannel, 'pusher:subscription_succeeded', 'burst client subscription')
+
+  let errors = 0
+  const onError = (event) => {
+    if (event?.type === 'PusherError' && event.data?.code === 4301) errors += 1
+  }
+  senderClient.connection.bind('error', onError)
+
+  let delivered = 0
+  receiverChannel.bind('client-burst', () => {
+    delivered += 1
+  })
+
+  for (let index = 0; index < 11; index += 1) senderChannel.trigger('client-burst', { index })
+
+  await delay(600)
+  assert.equal(errors, 1, `expected exactly one 4301 error, saw ${errors}`)
+  assert.equal(delivered, 10, `expected ten delivered client events, saw ${delivered}`)
+  assert.equal(senderClient.connection.state, 'connected')
+
+  await delay(1100)
+  const fresh = waitForEvent(receiverChannel, 'client-burst', 'a client event after the window')
+  senderChannel.trigger('client-burst', { index: 'fresh' })
+  assert.deepEqual(await fresh, { index: 'fresh' })
+  assert.equal(errors, 1, 'a client event after the window was rate limited')
+  senderClient.connection.unbind('error', onError)
+}
+
+async function checkBatchPublish(server, privateChannel, publicChannel) {
+  const privateEvent = waitForEvent(privateChannel, 'batch-private', 'the private batch event')
+  const publicEvent = waitForEvent(publicChannel, 'batch-public', 'the public batch event')
+
+  const response = await server.triggerBatch([
+    { channel: PRIVATE_CHANNEL, name: 'batch-private', data: { n: 1 } },
+    { channel: CHANNEL, name: 'batch-public', data: { n: 2 } },
+  ])
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {})
+  assert.deepEqual(await privateEvent, { n: 1 })
+  assert.deepEqual(await publicEvent, { n: 2 })
+}
+
+async function checkChannelList(server) {
+  const response = await server.get({
+    path: '/channels',
+    params: { filter_by_prefix: 'presence-', info: 'user_count' },
+  })
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(await response.json(), {
+    channels: { [PRESENCE_CHANNEL]: { user_count: 2 } },
+  })
+}
+
+async function checkChannelQueries(server, privateSubscriptions) {
+  const privateResponse = await server.get({
+    path: `/channels/${PRIVATE_CHANNEL}`,
+    params: { info: 'subscription_count' },
+  })
+  assert.equal(privateResponse.status, 200)
+  assert.deepEqual(await privateResponse.json(), {
+    occupied: true,
+    subscription_count: privateSubscriptions,
+  })
+
+  const presenceResponse = await server.get({
+    path: `/channels/${PRESENCE_CHANNEL}`,
+    params: { info: 'user_count' },
+  })
+  assert.equal(presenceResponse.status, 200)
+  assert.deepEqual(await presenceResponse.json(), { occupied: true, user_count: 2 })
+
+  const usersResponse = await server.get({ path: `/channels/${PRESENCE_CHANNEL}/users` })
+  assert.equal(usersResponse.status, 200)
+  assert.deepEqual(await usersResponse.json(), { users: [{ id: 'bob' }, { id: 'carol' }] })
+}
+
+async function checkChannelInfoRejection(server) {
+  await assert.rejects(
+    () => server.get({ path: `/channels/${CHANNEL}`, params: { info: 'user_count' } }),
+    (error) => {
+      assert.equal(error.status, 400)
+      return true
+    },
+  )
+}
+
 const checks = [
   ['pusher-js connects and subscribes to public-smoke', null],
   ['pusher SDK trigger reaches pusher-js', null],
@@ -358,6 +540,14 @@ const checks = [
   ['presence join sends member_added and lists the member', null],
   ['presence leave fires member_removed only for the last socket', null],
   ['presence events arrive and private events do not leak', null],
+  ['a private client event reaches the other subscriber and not the sender', null],
+  ['a presence client event carries the sender user_id as metadata', null],
+  ['a public channel client event is rejected with 4300 and not delivered', null],
+  ['eleven rapid client events yield one 4301 and the socket keeps working', null],
+  ['triggerBatch delivers a private and a public event and returns 200', null],
+  ['GET /channels lists the occupied presence channel with user_count', null],
+  ['GET /channels/<name> and /users report occupancy, counts, and ids', null],
+  ['GET /channels/<public>?info=user_count rejects with 400', null],
 ]
 
 const port = Number(process.env.PUSHER_COMPAT_PORT ?? (await findFreePort(DEFAULT_PORT)))
@@ -433,6 +623,38 @@ try {
   await checkChannelIsolation(pusherServer, presence.bobChannel, channelA, privateChannel)
   checks[9][1] = true
   console.log(`PASS 10 ${checks[9][0]}`)
+
+  const privateReceiver = await checkPrivateClientEvent(port, authPort, privateChannel)
+  checks[10][1] = true
+  console.log(`PASS 11 ${checks[10][0]}`)
+
+  await checkPresenceClientEvent(port, authPort, presence.bobChannel, 'bob')
+  checks[11][1] = true
+  console.log(`PASS 12 ${checks[11][0]}`)
+
+  await checkPublicClientEventRejected(channelA, channelB)
+  checks[12][1] = true
+  console.log(`PASS 13 ${checks[12][0]}`)
+
+  await checkClientEventRateLimit(port, authPort, privateReceiver)
+  checks[13][1] = true
+  console.log(`PASS 14 ${checks[13][0]}`)
+
+  await checkBatchPublish(pusherServer, privateChannel, channelA)
+  checks[14][1] = true
+  console.log(`PASS 15 ${checks[14][0]}`)
+
+  await checkChannelList(pusherServer)
+  checks[15][1] = true
+  console.log(`PASS 16 ${checks[15][0]}`)
+
+  await checkChannelQueries(pusherServer, 3)
+  checks[16][1] = true
+  console.log(`PASS 17 ${checks[16][0]}`)
+
+  await checkChannelInfoRejection(pusherServer)
+  checks[17][1] = true
+  console.log(`PASS 18 ${checks[17][0]}`)
 } catch (error) {
   for (let index = 0; index < checks.length; index += 1) {
     if (checks[index][1] === null) {
