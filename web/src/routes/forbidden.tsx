@@ -1,7 +1,6 @@
-import { useRouter } from '@tanstack/react-router'
 import { Loader2Icon, ShieldXIcon } from 'lucide-react'
 import { useState } from 'react'
-import { useAuth } from '@/auth/use-auth'
+import { useAuth, useAuthActions } from '@/auth/use-auth'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -10,7 +9,7 @@ import { useDocumentTitle } from '@/lib/use-document-title'
 export function ForbiddenPage() {
   useDocumentTitle('Access denied · depush')
   const auth = useAuth()
-  const router = useRouter()
+  const { refresh, signOut: endSession } = useAuthActions()
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const email = auth.state === 'admin' || auth.state === 'user' ? auth.user.email : ''
@@ -19,8 +18,7 @@ export function ForbiddenPage() {
     setRefreshing(true)
     setError(null)
     try {
-      const next = await router.options.context.authStore.refresh()
-      await router.invalidate()
+      const next = await refresh()
       if (next.state === 'unavailable') {
         setError('Could not refresh the role. Try again.')
       }
@@ -34,7 +32,7 @@ export function ForbiddenPage() {
   async function signOut() {
     setError(null)
     try {
-      await router.options.context.authStore.signOut()
+      await endSession()
     } catch {
       setError('Could not sign out. Try again.')
     }

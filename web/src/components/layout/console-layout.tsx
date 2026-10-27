@@ -1,9 +1,9 @@
-import { Link, Outlet, useRouter } from '@tanstack/react-router'
+import { Link, Outlet } from '@tanstack/react-router'
 import { LogOutIcon } from 'lucide-react'
 import { useState } from 'react'
 import { messageOf } from '@/api/errors'
 import { paths } from '@/app/paths'
-import { useAuth } from '@/auth/use-auth'
+import { useAuth, useAuthActions } from '@/auth/use-auth'
 import { Brand } from '@/components/brand'
 import { OfflineBanner } from '@/components/offline-banner'
 import { ThemeToggle } from '@/components/theme-toggle'
@@ -15,7 +15,7 @@ const navLinkClass =
 
 export function ConsoleLayout() {
   const auth = useAuth()
-  const router = useRouter()
+  const { signOut: endSession } = useAuthActions()
   const [signingOut, setSigningOut] = useState(false)
   const [signOutError, setSignOutError] = useState<string | null>(null)
   const admin = auth.state === 'admin'
@@ -24,7 +24,7 @@ export function ConsoleLayout() {
     setSigningOut(true)
     setSignOutError(null)
     try {
-      await router.options.context.authStore.signOut()
+      await endSession()
     } catch (error) {
       setSignOutError(messageOf(error))
     } finally {

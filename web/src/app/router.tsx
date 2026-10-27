@@ -5,7 +5,6 @@ import {
   type ErrorComponentProps,
   Link,
   redirect,
-  useRouter,
 } from '@tanstack/react-router'
 import { useEffect, useRef } from 'react'
 import { toApiError } from '@/api/errors'
@@ -13,6 +12,7 @@ import { requireAccess } from '@/auth/guard'
 import { landingFor } from '@/auth/policy'
 import type { SettledAuth } from '@/auth/types'
 import { AuthUnavailableError, isAuthUnavailableError } from '@/auth/types'
+import { useAuthActions } from '@/auth/use-auth'
 import { AuthLayout } from '@/components/layout/auth-layout'
 import { ConsoleLayout } from '@/components/layout/console-layout'
 import { RootLayout } from '@/components/layout/root-layout'
@@ -139,7 +139,7 @@ function landingRedirect(auth: SettledAuth): never {
 }
 
 function RootError({ error, reset }: ErrorComponentProps) {
-  const router = useRouter()
+  const { refresh } = useAuthActions()
   const online = useOnline()
   const wasOffline = useRef(!online)
 
@@ -150,15 +150,15 @@ function RootError({ error, reset }: ErrorComponentProps) {
     }
     if (!wasOffline.current) return
     wasOffline.current = false
-    void router.options.context.authStore.refresh().then(() => router.invalidate())
-  }, [online, router])
+    void refresh()
+  }, [online, refresh])
 
   if (isAuthUnavailableError(error)) {
     return (
       <OfflineScreen
         error={error.error}
         onRetry={() => {
-          void router.options.context.authStore.refresh().then(() => router.invalidate())
+          void refresh()
         }}
       />
     )
@@ -168,7 +168,7 @@ function RootError({ error, reset }: ErrorComponentProps) {
 }
 
 function RouteError({ error, reset }: ErrorComponentProps) {
-  const router = useRouter()
+  const { refresh, signOut } = useAuthActions()
   const apiError = toApiError(error)
 
   if (apiError.kind === 'http' && apiError.status === 403) {
@@ -179,10 +179,7 @@ function RouteError({ error, reset }: ErrorComponentProps) {
             type="button"
             variant="outline"
             onClick={() => {
-              void router.options.context.authStore
-                .refresh()
-                .then(() => router.invalidate())
-                .then(() => reset())
+              void refresh().then(() => reset())
             }}
           >
             Refresh role
@@ -191,7 +188,7 @@ function RouteError({ error, reset }: ErrorComponentProps) {
             type="button"
             variant="ghost"
             onClick={() => {
-              void router.options.context.authStore.signOut()
+              void signOut()
             }}
           >
             Sign out
