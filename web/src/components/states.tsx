@@ -68,7 +68,6 @@ export function ErrorPanel({
   children?: ReactNode
 }) {
   const copy = errorCopy(error)
-  const missingRetry = onRetry === undefined
 
   return (
     <div
@@ -80,7 +79,7 @@ export function ErrorPanel({
       </div>
       <h2 className="mt-4 text-base font-semibold">{copy.title}</h2>
       <p className="mt-1 text-sm text-muted-foreground">{copy.description}</p>
-      {copy.action === 'reload' && missingRetry ? (
+      {copy.action === 'reload' ? (
         <Button
           type="button"
           variant="outline"
@@ -91,12 +90,12 @@ export function ErrorPanel({
           Reload
         </Button>
       ) : null}
-      {onRetry === undefined ? null : (
+      {copy.action === 'retry' && onRetry !== undefined ? (
         <Button type="button" variant="outline" className="mt-5" onClick={onRetry}>
           <RefreshCwIcon />
           Try again
         </Button>
-      )}
+      ) : null}
       {children}
     </div>
   )
