@@ -97,12 +97,12 @@ app.get('/apps/:appId/channels', async (c) => {
   if (!info.ok) return c.json({ error: info.error }, 400)
 
   const prefix = c.req.query('filter_by_prefix')
-  if (prefix !== undefined && !isValidChannelName(prefix)) {
+  if (prefix !== undefined && prefix !== '' && !isValidChannelName(prefix)) {
     return c.json({ error: 'Invalid channel name' }, 400)
   }
 
   const snapshot = await appHub(c, signed.config).channelSnapshot()
-  const result = channelList(snapshot, prefix, info.info)
+  const result = channelList(snapshot, prefix === '' ? undefined : prefix, info.info)
   if (!result.ok) return c.json({ error: result.error }, 400)
 
   return c.json(result.body)
