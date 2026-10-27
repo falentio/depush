@@ -77,7 +77,7 @@ app.post('/apps/:appId/events', async (c) => {
     return c.json({ error: parsed.error }, parsed.status)
   }
 
-  const hub = await appHub(c, signed.config)
+  const hub = appHub(c, signed.config)
   await hub.broadcast({
     name: parsed.trigger.name,
     data: parsed.trigger.data,
@@ -99,7 +99,7 @@ app.post('/apps/:appId/batch_events', async (c) => {
     return c.json({ error: parsed.error }, parsed.status)
   }
 
-  const hub = await appHub(c, signed.config)
+  const hub = appHub(c, signed.config)
   for (const event of parsed.events) {
     await hub.broadcast({
       name: event.name,
@@ -126,7 +126,7 @@ app.get('/apps/:appId/channels', async (c) => {
     return c.json({ error: 'Invalid channel name' }, 400)
   }
 
-  const hub = await appHub(c, signed.config)
+  const hub = appHub(c, signed.config)
   const snapshot = await hub.channelSnapshot()
   const result = channelList(snapshot, prefix === '' ? undefined : prefix, info.info)
   if (!result.ok) return c.json({ error: result.error }, 400)
@@ -143,7 +143,7 @@ app.get('/apps/:appId/channels/:channelName/users', async (c) => {
     return c.json({ error: 'Invalid channel name' }, 400)
   }
 
-  const hub = await appHub(c, signed.config)
+  const hub = appHub(c, signed.config)
   const snapshot = await hub.channelSnapshot()
   const result = channelUsers(snapshot, channelName)
   if (!result.ok) return c.json({ error: result.error }, 400)
@@ -178,7 +178,7 @@ app.get('/apps/:appId/channels/:channelName/presence', async (c) => {
     return c.json({ error: PRESENCE_ONLY }, 400)
   }
 
-  const hub = await appHub(c, signed.config)
+  const hub = appHub(c, signed.config)
   const presence = await hub.presenceInfo(channelName)
   if (presence === null) return c.json({ error: PRESENCE_ONLY }, 400)
 
@@ -201,7 +201,7 @@ app.get('/apps/:appId/channels/:channelName', async (c) => {
     return c.json({ error: 'cache is only available on cache channels' }, 400)
   }
 
-  const hub = await appHub(c, signed.config)
+  const hub = appHub(c, signed.config)
   const snapshot = await hub.channelSnapshot()
   const result = channelInfo(snapshot, channelName, info.info)
   if (!result.ok) return c.json({ error: result.error }, 400)
@@ -223,10 +223,8 @@ function registry(c: AppContext) {
   return c.env.REGISTRY.get(c.env.REGISTRY.idFromName('registry'))
 }
 
-async function appHub(c: AppContext, config: AppConfig) {
-  const hub = c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
-  await hub.init(config)
-  return hub
+function appHub(c: AppContext, config: AppConfig) {
+  return c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
 }
 
 function channelState(c: AppContext, config: AppConfig, channel: string) {

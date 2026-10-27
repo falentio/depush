@@ -3,7 +3,7 @@ import * as v from 'valibot'
 import { verifyChannelAuth } from './auth'
 import type { Channel } from './channel'
 import type { AppConfig } from './config'
-import { DEFAULT_CACHE_TTL_SECONDS } from './config'
+import { readSettings } from './config'
 import type { AppBindings } from './env'
 import type { ChannelSnapshot } from './events'
 import { dataBytes, MAX_DATA_BYTES } from './events'
@@ -103,9 +103,8 @@ export class AppHub extends DurableObject<AppBindings> {
   private readonly clientLimiter = new ClientEventLimiter()
 
   /**
-   * The registry row owns the credentials, so the Worker hands the resolved
-   * config in once per Durable Object lifetime. Reads happen on eviction only,
-   * never per frame.
+   * Only the WebSocket upgrade needs the key and secret, so the Worker hands
+   * the resolved config in there. Publish and query calls never touch it.
    */
   init(config: AppConfig): void {
     this.config = config
@@ -378,8 +377,9 @@ export class AppHub extends DurableObject<AppBindings> {
   }
 
   private channelState(channel: string): DurableObjectStub<Channel> {
-    if (this.config === null) throw new Error('AppHub is not initialized')
-    return this.env.CHANNEL.get(this.env.CHANNEL.idFromName(`${this.config.appId}:${channel}`))
+    const appId = this.ctx.id.name
+    if (appId === undefined) throw new Error('AppHub is not addressed by app id')
+    return this.env.CHANNEL.get(this.env.CHANNEL.idFromName(`${appId}:${channel}`))
   }
 
   private async recordEvent(channel: string, input: RecordedEvent): Promise<void> {
@@ -388,7 +388,7 @@ export class AppHub extends DurableObject<AppBindings> {
       data: input.data,
       userId: input.userId,
       cache: input.cache && isCacheChannel(channel),
-      ttlSeconds: this.config?.cacheTtlSeconds ?? DEFAULT_CACHE_TTL_SECONDS,
+      ttlSeconds: readSettings(this.env).cacheTtlSeconds,
     })
   }
 
