@@ -203,6 +203,26 @@ Durable Object migrations and prints the Worker URL. To serve it on your own hos
 custom domain or route for the Worker in the Cloudflare dashboard. The zone must belong to the
 same account.
 
+## Cost
+
+There is no subscription and no per-message price. The bill is Cloudflare's. Workers Free costs
+nothing and covers about 33,000 publishes a day, but it fails closed: one daily ceiling and
+publishes stop until midnight UTC. The Workers Paid plan is a $5 monthly minimum, then $0.15 per
+million Durable Object requests, with socket frames billed 20 to 1, outgoing messages free, and
+history inside the included storage.
+
+Pusher bills the publish plus every delivery, so the gap widens with fan-out: a workload worth
+$1,199 a month on Pusher Channels prices at about $13 here, and one worth $49 prices at about $5.
+Vask is the hosted version of the same idea, billed per publish on the same edge, and it lands
+between the two: $10 to $100 a month for the same six workloads, with no infrastructure to run.
+
+Against Vask the maintenance budget is thin. A quarter hour a month at $100 an hour eats the
+difference at most of these scales, so self-hosting is worth it for the control, not for the bill.
+
+[Cost comparison](docs/cost-comparison.md) prices six workloads all three ways, free plans included,
+with the assumptions, the per-meter breakdown, and `scripts/cost-model.mjs` to rerun the numbers
+against your own traffic.
+
 ## Client configuration
 
 Point the client at the Worker. On a deployed Worker the socket is `wss` on port 443.
