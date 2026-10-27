@@ -1,202 +1,405 @@
 # depush
 
-A self-hosted Pusher Channels server on Cloudflare Workers. One Worker, one app, protocol v7.
-Official `pusher-js` clients and the official `pusher` Node server SDK talk to it unmodified.
+depush is a self-hosted Pusher Channels server that runs as one Cloudflare Worker. It speaks
+protocol v7, and the official `pusher-js` 8.x client and the official `pusher` Node server SDK
+talk to it without changes. One deployment serves one app.
 
-## Configuration
+You point a client at your Worker instead of Pusher's edge, and your application server keeps
+signing the channel auth it already signs. There is no Pusher account in the path.
 
-Set three values as Worker secrets (or in `.dev.vars` locally, see `.dev.vars.example`):
+## What it is not
 
-| Variable            | Meaning                                        |
-| ------------------- | ---------------------------------------------- |
-| `PUSHER_APP_ID`     | App id used in `POST /apps/:appId/events`      |
-| `PUSHER_APP_KEY`    | App key used by the client and in `auth_key`   |
-| `PUSHER_APP_SECRET` | Secret used for HMAC-SHA256 request signatures |
+depush has no dashboard, accounts, teams, quotas, or billing. The protocol surface covers publish,
+batch publish, channel queries, presence, and client events. These are not implemented:
 
-Optional: `PUSHER_ACTIVITY_TIMEOUT` in seconds (default `120`), sent to the client in
-`pusher:connection_established`.
+- Webhooks.
+- Cache channels.
+- Encrypted channels.
+- User signin and watchlists.
+- Connection termination.
+- Per-event batch `info`.
+- Event history.
 
-## Run
+## Support
+
+| Capability                    | Status                                                         |
+| ----------------------------- | -------------------------------------------------------------- |
+| Public channels               | Supported                                                      |
+| Private channels              | Supported, with auth from your app server                      |
+| Presence channels             | Supported, with auth from your app server                      |
+| Client events                 | Supported on private and presence channels                     |
+| HTTP publish                  | Supported, with `socket_id` exclusion                          |
+| Batch publish                 | Supported, 1 to 10 events                                      |
+| Channel list and channel info | Supported, with `user_count` and `subscription_count`          |
+| Presence users                | Supported                                                      |
+| Webhooks                      | Not supported. The Worker makes no outbound calls.             |
+| Cache channels                | Not supported. A `cache-*` name is only a channel name.        |
+| Encrypted channels            | Not supported. A subscribe gets `pusher:error` 4009 and closes |
+| User signin, watchlists       | Not supported. `pusher:signin` fails parsing and gets 4300     |
+| Connection termination        | Not supported. The route returns 404                           |
+| Per-event batch `info`        | Not supported. The batch returns 400                           |
+| Event history                 | Not supported. `GET /apps/:appId/events` returns 404           |
+
+## Quickstart
+
+You need Node 22 or later and pnpm.
 
 ```sh
 pnpm install
-pnpm dev          # http://127.0.0.1:5173, Worker served by the Cloudflare Vite plugin
-pnpm compat       # starts its own dev server on 127.0.0.1:8787 and proves the official SDKs work
+cp .dev.vars.example .dev.vars
 ```
 
-`pnpm compat` starts its own dev server on `127.0.0.1` (port 8787 when free, the next free port otherwise) and a local auth server on the next free port. It backs up `.dev.vars`, writes test credentials, plays the application server for the private and presence checks, runs the checks, and restores the file.
+Set `PUSHER_APP_ID`, `PUSHER_APP_KEY`, and `PUSHER_APP_SECRET` in `.dev.vars`. Then start the
+dev server:
 
-## Client
+```sh
+pnpm dev
+```
 
-Point the official client at the Worker's host and port:
+Vite serves the Worker on `http://localhost:5173`. Check it:
+
+```sh
+curl http://localhost:5173/healthz
+# {"status":"ok"}
+```
+
+Subscribe from a browser or from Node with the official client. Locally the socket is plain
+`ws`, so `forceTLS` stays `false`.
 
 ```js
-const pusher = new Pusher(PUSHER_APP_KEY, {
+import Pusher from 'pusher-js'
+
+const pusher = new Pusher('your-app-key', {
   cluster: 'mt1',
   wsHost: '127.0.0.1',
-  wsPort: 8787,
+  wsPort: 5173,
   forceTLS: false,
   enabledTransports: ['ws'],
+  disableStats: true,
 })
+
 const channel = pusher.subscribe('public-smoke')
 channel.bind('greeting', (data) => console.log(data))
 ```
 
-Trigger from a server with the official Node SDK:
+Publish with the official Node SDK, pointed at the same port:
 
 ```js
-const server = new Pusher({ appId, key, secret, host: '127.0.0.1', port: '8787', useTLS: false })
+import PusherServer from 'pusher'
+
+const server = new PusherServer({
+  appId: 'your-app-id',
+  key: 'your-app-key',
+  secret: 'your-app-secret',
+  host: '127.0.0.1',
+  port: '5173',
+  useTLS: false,
+})
+
 await server.trigger('public-smoke', 'greeting', { hello: 'world' })
 ```
 
-## Private and presence channels
+## Deploy
 
-Your application server authorizes `private-*` and `presence-*` subscriptions. The Worker only
-verifies the `auth` string the client sends: it never serves `/pusher/auth` and never exposes the
-app secret.
+Log in, then store the three credentials as Worker secrets:
 
-Sign `<socket_id>:<channel>` for a private channel and
-`<socket_id>:<channel>:<channel_data>` for a presence channel with HMAC-SHA256 and the app
-secret. Return `<app_key>:<signature>`. A presence response also carries the exact
-`channel_data` string that was signed.
-
-The examples below reuse the `server` SDK instance from [Client](#client). That SDK builds both
-values:
-
-```js
-const auth = server.authorizeChannel(socketId, channelName)
-// { auth: 'key:signature' }
-
-const presenceAuth = server.authorizeChannel(socketId, channelName, {
-  user_id: 'alice',
-  user_info: { name: 'Alice' },
-})
-// { auth: 'key:signature', channel_data: '{"user_id":"alice","user_info":{"name":"Alice"}}' }
+```sh
+pnpm exec wrangler login
+pnpm exec wrangler secret put PUSHER_APP_ID
+pnpm exec wrangler secret put PUSHER_APP_KEY
+pnpm exec wrangler secret put PUSHER_APP_SECRET
 ```
 
-A minimal handler reads the client's form-encoded `socket_id`, `channel_name`, and any extra
-params, then returns that JSON:
+`PUSHER_APP_ID` is the id in the HTTP path, `/apps/:appId/events`. `PUSHER_APP_KEY` is the key the
+client connects with. `PUSHER_APP_SECRET` signs HTTP requests and channel authorizations. Keep the
+secret on the Worker and your app server, never in a client.
 
-```js
-import { createServer } from 'node:http'
+Optional, set the ping interval the client receives in `pusher:connection_established`:
 
-createServer((request, response) => {
-  let body = ''
-  request.on('data', (chunk) => (body += chunk))
-  request.on('end', () => {
-    const params = new URLSearchParams(body)
-    const socketId = params.get('socket_id')
-    const channelName = params.get('channel_name')
-    const user = params.get('user')
-    const data = channelName?.startsWith('presence-')
-      ? { user_id: user, user_info: { name: user } }
-      : undefined
-    const auth = server.authorizeChannel(socketId, channelName, data)
-    response.writeHead(200, { 'content-type': 'application/json' })
-    response.end(JSON.stringify(auth))
-  })
-}).listen(3000)
+```sh
+pnpm exec wrangler secret put PUSHER_ACTIVITY_TIMEOUT
 ```
 
-Point the client at that endpoint with the `channelAuthorization` client option:
+The value is a whole number of seconds, 1 or more. An invalid value falls back to 120, which is
+also the default.
+
+Build and deploy:
+
+```sh
+pnpm deploy
+```
+
+The command runs the Vite build and then `wrangler deploy`, which applies the `v1` Durable Object
+migration and prints the Worker URL. To serve it on your own hostname, add a custom domain or
+route for the Worker in the Cloudflare dashboard. The zone must belong to the same account.
+
+## Client configuration
+
+Point the client at the Worker. On a deployed Worker the socket is `wss` on port 443.
+
+| Option              | Value                      | What it does                                    |
+| ------------------- | -------------------------- | ----------------------------------------------- |
+| `wsHost`            | your Worker host           | Replaces the Pusher edge host                   |
+| `wsPort`            | `443`                      | Where the Worker answers `wss`                  |
+| `forceTLS`          | `true`                     | Uses `wss`                                      |
+| `enabledTransports` | `['ws']`                   | Uses the WebSocket transport only               |
+| `cluster`           | any value, such as `'mt1'` | Placeholder; `wsHost` decides where it connects |
+| `disableStats`      | `true`                     | Stops statistics requests to Pusher             |
 
 ```js
-const pusher = new Pusher(PUSHER_APP_KEY, {
+const pusher = new Pusher('your-app-key', {
   cluster: 'mt1',
+  wsHost: 'depush.example.com',
+  wsPort: 443,
+  forceTLS: true,
+  enabledTransports: ['ws'],
+  disableStats: true,
+})
+```
+
+The Node SDK takes the same destination as `host`, `port`, and `useTLS`:
+
+```js
+const server = new PusherServer({
+  appId: process.env.PUSHER_APP_ID,
+  key: process.env.PUSHER_APP_KEY,
+  secret: process.env.PUSHER_APP_SECRET,
+  host: 'depush.example.com',
+  port: '443',
+  useTLS: true,
+})
+```
+
+## Private and presence auth
+
+Your application server authorizes `private-*` and `presence-*` subscriptions. The Worker verifies
+the `auth` string the client sends. It never serves an auth endpoint and never exposes the app
+secret.
+
+The signature is HMAC-SHA256, hex encoded, over `<socket_id>:<channel>`. A presence channel signs
+`<socket_id>:<channel>:<channel_data>`. The response carries `auth` as `<app_key>:<signature>`,
+and for presence the exact `channel_data` string that was signed.
+
+The official Node SDK builds both. This Express handler authenticates the user first, then signs:
+
+```js
+import express from 'express'
+import PusherServer from 'pusher'
+
+const app = express()
+const pusher = new PusherServer({
+  appId: process.env.PUSHER_APP_ID,
+  key: process.env.PUSHER_APP_KEY,
+  secret: process.env.PUSHER_APP_SECRET,
+  host: 'depush.example.com',
+  port: '443',
+  useTLS: true,
+})
+
+app.post('/pusher/auth', express.urlencoded({ extended: false }), (request, response) => {
+  if (request.user === undefined) {
+    response.sendStatus(401)
+    return
+  }
+
+  const { socket_id: socketId, channel_name: channelName } = request.body
+  const presence = channelName.startsWith('presence-')
+    ? { user_id: request.user.id, user_info: { name: request.user.name } }
+    : undefined
+
+  response.json(pusher.authorizeChannel(socketId, channelName, presence))
+})
+```
+
+Wire your session middleware before this handler so it sets `request.user` and rejects anonymous
+requests. Without that middleware the check above always returns 401. The endpoint must
+authenticate the user before it signs anything, because a signed auth string is enough to join
+the channel.
+
+Point the client at that endpoint:
+
+```js
+const pusher = new Pusher('your-app-key', {
+  cluster: 'mt1',
+  wsHost: 'depush.example.com',
+  wsPort: 443,
+  forceTLS: true,
+  enabledTransports: ['ws'],
+  disableStats: true,
   channelAuthorization: {
-    endpoint: 'https://example.com/pusher/auth',
+    endpoint: 'https://app.example.com/pusher/auth',
     transport: 'ajax',
-    params: { user: 'alice' },
   },
 })
-
-const presence = pusher.subscribe('presence-room')
-presence.bind('pusher:subscription_succeeded', (members) => {
-  members.count // unique users, not sockets
-  members.get('alice') // { id: 'alice', info: { name: 'Alice' } }
-})
-presence.bind('pusher:member_added', (member) => console.log(member.id))
-presence.bind('pusher:member_removed', (member) => console.log(member.id))
 ```
 
-Membership follows the sockets. A user's first socket emits `pusher:member_added` to the other
-subscribers; a duplicate subscribe re-sends the success frame without a second entry; the user's
-last socket to leave emits `pusher:member_removed`. `user_id` is a non-empty string or a number,
-`user_info` is an object, and members dedupe by `String(user_id)`.
+Membership follows the sockets. A user's first socket sends `pusher:member_added` to the other
+subscribers. A second socket for the same user sends the subscription success frame without a
+second member. The user's last socket to leave sends `pusher:member_removed`. `user_id` is a
+non-empty string or a number, `user_info` is an object, and members dedupe by `String(user_id)`.
 
-An invalid or missing `auth`, and any `private-encrypted-` channel, gets `pusher:error` with code
-`4009` and a socket close with code `4009`. Encrypted channels are not supported in this version.
-
-## Client events
-
-A subscribed client triggers `client-*` events on `private-*` and `presence-*` channels:
-
-```js
-privateChannel.bind('client-typing', (data, metadata) => console.log(data, metadata))
-privateChannel.trigger('client-typing', { typing: true })
-```
-
-The Worker relays the event to every other subscriber of that channel, never to the sender. The
-sender's own socket is excluded by socket id, exactly like a server trigger targeted with
-`socket_id`.
-
-- Events on public channels, on channels the socket is not subscribed to, and with data over
-  10 KB get `pusher:error` code `4300`. The connection stays open.
-- A presence channel adds a top-level `user_id` from the sender's presence subscription, which
-  `pusher-js` hands to the listener as `metadata.user_id`. Private channels carry no `user_id`.
-- One socket may send 10 client events per rolling 1000 ms. The 11th gets `pusher:error` code
-  `4301` and is dropped; the connection stays open. Rejected frames do not count toward the
-  limit. The limiter lives in the `AppHub` instance's memory, so a hibernation resets it.
-
-## Batch publish
-
-`POST /apps/:appId/batch_events` is signed exactly like `/events` and takes 1 to 10 events:
-
-```js
-await server.triggerBatch([
-  { channel: 'private-room', name: 'greeting', data: { hello: 'world' } },
-  { channel: 'public-smoke', name: 'greeting', data: { hello: 'again' } },
-])
-```
-
-Each item carries a singular `channel`, not `channels`, and may set `socket_id` for exclusion.
-The whole request is rejected with `400` before anything is broadcast when an event is invalid,
-has no channel, uses a `private-encrypted-` channel, or carries a per-event `info` string. A
-`data` field over 10 KB returns `413`. The successful response is `{}`.
-
-## Channel queries
-
-The Node SDK's `server.get({ path, params })` reaches three signed GET endpoints.
-
-| Endpoint                                       | Params                     | Response                                |
-| ---------------------------------------------- | -------------------------- | --------------------------------------- |
-| `GET /apps/:appId/channels`                    | `filter_by_prefix`, `info` | `{ "channels": { "<name>": { ... } } }` |
-| `GET /apps/:appId/channels/:channelName`       | `info`                     | `{ "occupied": boolean, ... }`          |
-| `GET /apps/:appId/channels/:channelName/users` | none                       | `{ "users": [ { "id": "<userId>" } ] }` |
-
-`info` is a comma-separated subset of `user_count` and `subscription_count`. `user_count` applies
-only to presence channels, and in the list endpoint it needs a `filter_by_prefix` that selects
-presence channels. `subscription_count` applies only to non-presence channels. Asking for an
-attribute that does not apply to a channel in the response is a `400`, as are `cache` and any
-unknown attribute name. Every count and every member comes from the live socket attachments in
-the `AppHub`; `users` is deduped, sorted, and defined only for presence channels.
+A rejected auth and any `private-encrypted-` channel get `pusher:error` code 4009 and a socket
+close with code 4009.
 
 ## API
 
-- `GET /app/:key?protocol=7` upgrades to the `AppHub` Durable Object.
-- `POST /apps/:appId/events` with a signed request broadcasts to channel subscribers.
-- `POST /apps/:appId/batch_events` with a signed request broadcasts up to ten events.
-- `GET /apps/:appId/channels`, `/channels/:channelName`, and `/channels/:channelName/users`
-  answer channel queries.
-- `GET /healthz` returns `{ "status": "ok" }`.
+| Method | Path                                       | Auth            | Purpose                       |
+| ------ | ------------------------------------------ | --------------- | ----------------------------- |
+| GET    | `/healthz`                                 | none            | Liveness check                |
+| GET    | `/app/:key?protocol=7`                     | key in the path | WebSocket upgrade             |
+| POST   | `/apps/:appId/events`                      | signed request  | Publish to up to 100 channels |
+| POST   | `/apps/:appId/batch_events`                | signed request  | Publish 1 to 10 events        |
+| GET    | `/apps/:appId/channels`                    | signed request  | List occupied channels        |
+| GET    | `/apps/:appId/channels/:channelName`       | signed request  | Channel occupancy and counts  |
+| GET    | `/apps/:appId/channels/:channelName/users` | signed request  | Presence members              |
 
-Supported in this version: public, private, and presence channels,
-`pusher:connection_established`, `pusher:ping` / `pusher:pong`, `pusher:subscribe` /
-`pusher:unsubscribe`, channel authorization generated by your application server, signed event
-publishing with `socket_id` exclusion, client events on private and presence channels, batch
-publish, and channel queries.
+Every `/apps` request carries the auth parameters the official SDK adds: `auth_key`,
+`auth_timestamp`, `auth_version=1.0`, and `auth_signature`. A request with a non-empty body also
+carries `body_md5`. The timestamp must be within 600 seconds of the Worker's clock. The signature
+covers the method, the path, and the query string without `auth_signature`.
 
-Not implemented: batch event `info`,
-`POST /apps/:appId/users/:userId/terminate_connections` (it targets the user-auth id from
-`pusher:signin`, and a presence `user_id` is a different identity), encrypted channels, cache
-channels, and webhooks.
+Publish takes `name`, `data`, and either `channels` with up to 100 names or one `channel`, plus an
+optional `socket_id` to exclude. Send `data` as a string. The Node SDK serializes objects for you.
+The response is `{}`.
+
+Batch publish takes `{ "batch": [ { "channel": "...", "name": "...", "data": "..." } ] }` with 1
+to 10 events. Each item carries a singular `channel` and may set `socket_id`. One invalid event
+rejects the whole request with 400 before anything is broadcast. The response is `{}`.
+
+Channel list and info take two query parameters:
+
+| Parameter          | Values                                                         |
+| ------------------ | -------------------------------------------------------------- |
+| `filter_by_prefix` | A channel name prefix, for example `presence-`                 |
+| `info`             | A comma-separated subset of `user_count`, `subscription_count` |
+
+`user_count` applies only to presence channels, and the list endpoint needs a `filter_by_prefix`
+that selects presence channels. `subscription_count` applies only to other channels. Asking for
+an attribute that does not apply returns 400, as does an unknown attribute such as `cache`.
+
+Response shapes:
+
+```json
+{ "channels": { "presence-room": { "user_count": 2 } } }
+{ "occupied": true, "subscription_count": 3 }
+{ "users": [ { "id": "alice" }, { "id": "bob" } ] }
+```
+
+Counts and members come from the live sockets. The users list is deduped and sorted, and only
+presence channels have one.
+
+## Errors
+
+| Where           | Code   | Meaning                                                                                           |
+| --------------- | ------ | ------------------------------------------------------------------------------------------------- |
+| WebSocket close | `4001` | The `:key` does not match `PUSHER_APP_KEY`                                                        |
+| WebSocket close | `4005` | The upgrade path is not a route                                                                   |
+| WebSocket close | `4007` | The `protocol` parameter is present but not `7`                                                   |
+| WebSocket close | `4008` | The `protocol` parameter is missing                                                               |
+| WebSocket close | `4009` | Channel auth failed, or the channel is `private-encrypted-`                                       |
+| `pusher:error`  | `4300` | A bad frame, a client event on a channel you do not own, or data over 10 KB                       |
+| `pusher:error`  | `4301` | More than 10 client events in one second                                                          |
+| HTTP            | `400`  | Invalid JSON or payload, unsupported `info`, batch `info`, or a plain HTTP request to `/app/:key` |
+| HTTP            | `401`  | Wrong app id in the path, `auth_key`, `auth_version`, timestamp, `body_md5`, or signature         |
+| HTTP            | `413`  | Event data over 10,240 bytes                                                                      |
+
+A channel auth failure sends `pusher:error` 4009 and then closes the socket with 4009. The 4300
+and 4301 errors leave the connection open.
+
+## Limits
+
+| Limit                    | Value                  |
+| ------------------------ | ---------------------- |
+| Event data               | 10,240 bytes of UTF-8  |
+| Channels per publish     | 100                    |
+| Events per batch         | 10                     |
+| Client events per socket | 10 per rolling 1000 ms |
+| Event name               | 200 characters         |
+| Channel name             | Non-empty string       |
+| Apps per deployment      | 1                      |
+
+Presence state lives in the live sockets. It is gone when the last socket leaves and the Durable
+Object is evicted, and nothing replays it.
+
+## Operations
+
+One Durable Object per app, named from `PUSHER_APP_ID`, writes all sockets and channel membership.
+The WebSocket route and the HTTP publish and query routes reach the same object, so a publish
+always sees the subscriptions in one place. The object accepts hibernatable sockets: membership
+lives in each socket's attachment, and a restarted object rebuilds it from the live sockets.
+
+There is no D1 database and no other store. Changing `PUSHER_APP_ID` points the Worker at a fresh,
+empty object.
+
+The `v1` migration creates the `AppHub` class as SQLite-backed, which the Workers free plan
+supports. A deployed Worker only applies migration tags it has not seen, so to rename the class or
+change its storage type, add a migration with a new tag. Editing `v1` in place does not update a
+deployed Worker.
+
+Run `wrangler tail` to watch requests and logs:
+
+```sh
+pnpm exec wrangler tail
+```
+
+`/healthz` answers from the Worker and does not touch the Durable Object, so it proves the Worker
+is up, not that a hub is reachable.
+
+The Worker does not rate-limit HTTP publishing or the query routes. If you expose them, add
+Cloudflare rate limiting rules or your own. Cloudflare account limits also apply to the Worker and
+to the Durable Object.
+
+## Development
+
+```sh
+pnpm check                              # Biome lint and format check
+pnpm typecheck                          # tsc --noEmit
+pnpm test                               # Vitest in workerd
+pnpm build                              # Vite build
+pnpm exec wrangler deploy --dry-run     # Check the deploy bundle and bindings
+pnpm compat                             # Run the official SDKs against a local server
+```
+
+`pnpm compat` starts its own dev server and local auth server with test credentials. It backs up
+`.dev.vars`, writes test values, plays the application server for private and presence auth, runs
+the checks, and restores the file. Set `PUSHER_COMPAT_PORT` to choose the server port. It uses
+8787 when that port is free and the next free port otherwise.
+
+Run `pnpm cf-typegen` after you change `wrangler.jsonc`, then commit the regenerated
+`worker-configuration.d.ts`.
+
+## Architecture
+
+```text
+Worker (src/index.ts) [1]
+├── GET /healthz [1a] → {"status":"ok"}
+├── GET /app/:key?protocol=7 [1b]
+│   ├── handshake check [1b1] → 4001, 4007, 4008 before the hub
+│   └── AppHub.fetch [1b2]
+│       ├── ctx.acceptWebSocket [1b2a]
+│       ├── serializeAttachment({ socketId, subscriptions }) [1b2b]
+│       ├── webSocketMessage [1b2c] → parseFrame: subscribe, unsubscribe, ping, client event
+│       └── webSocketClose [1b2d] → leavePresence → member_removed
+├── POST /apps/:appId/events [1c]
+│   └── verifyRequest → parseTrigger → AppHub.broadcast [1c1]
+├── POST /apps/:appId/batch_events [1d]
+│   └── verifyRequest → parseBatch → AppHub.broadcast per event [1d1]
+└── GET /apps/:appId/channels[...] [1e]
+    └── verifyRequest → AppHub.channelSnapshot → live attachments [1e1]
+```
+
+The signed HTTP path and the socket path meet at the same `AppHub` instance, whose id is
+`idFromName(PUSHER_APP_ID)`.
+
+## Troubleshooting
+
+| Symptom                                    | Cause                                          | Fix                                                                                                    |
+| ------------------------------------------ | ---------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Close `4001`, "Application does not exist" | The client key is not `PUSHER_APP_KEY`         | Use the key from the same app as the Worker                                                            |
+| Close `4008`                               | No `protocol` query parameter                  | Use official `pusher-js`, or add `protocol=7`. A proxy can strip the query                             |
+| Close `4007`                               | The protocol is not `7`                        | Use `pusher-js` 8.x, which sends `7`                                                                   |
+| Close `4009`                               | Channel auth rejected, or an encrypted channel | Sign `socket_id:channel`, check the key and secret, and send back the exact `channel_data`             |
+| HTTP `401`                                 | A signed request did not verify                | Check `auth_key`, the clock skew against 600 s, `body_md5`, and the signed path and query              |
+| `pusher:error` `4301`                      | More than 10 client events in one second       | Send fewer, or batch them on the server                                                                |
+| HTTP `404`                                 | Route not implemented                          | Terminate connections and event history do not exist                                                   |
+| `pusher:error` `4300`, "Invalid message"   | Unknown frame, such as `pusher:signin`         | Send only `pusher:subscribe`, `pusher:unsubscribe`, `pusher:ping`, `pusher:pong`, or `client-*` frames |
