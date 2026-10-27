@@ -18,8 +18,8 @@ export type AuthStore = {
   signUp(input: SignUpInput): Promise<ProbedAuth>
   /** POST; a 401 counts as already signed out. */
   signOut(): Promise<void>
-  /** Local transition only, for a 401 surfaced by the HTTP layer. */
-  expire(): void
+  /** Re-probes after a 401; a newer session is never overwritten. */
+  expire(): Promise<void>
 }
 
 /** The only function that turns the server's role string into the auth union. */
@@ -117,8 +117,12 @@ export function createAuthStore(auth: Api['auth']): AuthStore {
     commit({ state: 'anonymous', reason: 'signed-out' })
   }
 
-  function expire(): void {
-    if (state.state === 'anonymous' && state.reason === 'expired') return
+  async function expire(): Promise<void> {
+    if (state.state !== 'admin' && state.state !== 'user') return
+    const started = generation
+    const next = await probe()
+    if (started !== generation) return
+    if (next.state !== 'anonymous') return
     commit({ state: 'anonymous', reason: 'expired' })
   }
 

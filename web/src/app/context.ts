@@ -19,6 +19,8 @@ export function createApp(): ConsoleApp {
   const http = createHttp()
   const api = createApi(http)
   const authStore = createAuthStore(api.auth)
-  http.onSessionExpired(authStore.expire)
+  http.onSessionExpired(() => {
+    void authStore.expire()
+  })
   return { api, authStore }
 }
