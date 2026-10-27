@@ -72,7 +72,8 @@ export async function bootstrap(baseUrl, appName = 'compat') {
   })
   if (created.response.status !== 201) {
     throw new Error(
-      `app create failed with ${created.response.status}: ${JSON.stringify(created.body)}`,
+      `app create failed with ${created.response.status}: ${JSON.stringify(created.body)}; ` +
+        'remove .wrangler/state/v3/do/depush-Registry for a clean local registry',
     )
   }
 
