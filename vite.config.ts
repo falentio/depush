@@ -4,8 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import { VitePWA } from 'vite-plugin-pwa'
-import { assertRouteNamespace, paths } from './web/src/app/paths.ts'
-import { WORKER_ROUTE_PREFIXES } from './web/src/app/worker-routes.ts'
+import { assertRouteNamespace, paths, WORKER_PREFIXES } from './web/src/app/paths.ts'
 
 assertRouteNamespace(Object.values(paths))
 
@@ -43,9 +42,7 @@ export default defineConfig({
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],
         navigateFallback: '/index.html',
-        navigateFallbackDenylist: WORKER_ROUTE_PREFIXES.map(
-          (prefix) => new RegExp(`^${prefix}(?:/|$)`),
-        ),
+        navigateFallbackDenylist: WORKER_PREFIXES.map((prefix) => new RegExp(`^${prefix}(?:/|$)`)),
         cleanupOutdatedCaches: true,
       },
     }),
