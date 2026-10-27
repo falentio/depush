@@ -1,3 +1,4 @@
+import { evictDurableObject } from 'cloudflare:test'
 import { env } from 'cloudflare:workers'
 import { describe, expect, it } from 'vitest'
 
@@ -53,5 +54,13 @@ describe('Channel cache', () => {
 
     expect(await stub.snapshot()).toBeNull()
     expect(await stub.cacheInfo()).toBeNull()
+  })
+
+  it('keeps the cache across a Durable Object eviction', async () => {
+    const stub = channelStub('unit-test:evicted')
+    await stub.record(cached)
+    await evictDurableObject(stub)
+
+    expect(await stub.snapshot()).toEqual({ name: 'greeting', data: '{"hello":"world"}' })
   })
 })
