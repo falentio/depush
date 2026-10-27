@@ -28,7 +28,8 @@
     "vite.config.ts",
     "vitest.config.ts",
     "vitest.compat.config.ts",
-    "worker-configuration.d.ts"
+    "worker-configuration.d.ts",
+    "vitest.client.config.ts"
   ],
   "exclude": [
     "test/client"

@@ -11,7 +11,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "deploy": "vite build && wrangler deploy",
-    "test": "vitest run",
+    "test": "vitest run --config vitest.config.ts && vitest run --config vitest.client.config.ts",
     "test:watch": "vitest",
     "test:compat": "node scripts/test-compat.mjs",
     "fuzz": "node scripts/fuzz.mjs",
@@ -21,7 +21,8 @@
     "lint": "biome lint .",
     "format": "biome format --write .",
     "check": "biome check .",
-    "verify:frontend": "node scripts/verify-frontend.mjs"
+    "verify:frontend": "node scripts/verify-frontend.mjs",
+    "test:client": "vitest run --config vitest.client.config.ts"
   },
   "dependencies": {
     "@better-auth/core": "1.7.14",

@@ -11,7 +11,7 @@ export default defineConfig({
     }),
   ],
   test: {
-    exclude: [...configDefaults.exclude, 'test/compat/**'],
+    exclude: [...configDefaults.exclude, 'test/compat/**', 'test/client/**'],
     // better-auth hashes passwords with scrypt, which takes seconds on a cold
     // workerd isolate.
     testTimeout: 30_000,
