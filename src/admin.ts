@@ -62,6 +62,20 @@ adminRoutes.post(
   }),
 )
 
+adminRoutes.patch(
+  '/api/apps/:appId',
+  ...adminOnly(async (c) => {
+    const body = await readJson(c)
+    if (body === null) return c.json({ error: 'Invalid JSON body' }, 400)
+    const parsed = v.safeParse(createAppSchema, body)
+    if (!parsed.success) return c.json({ error: 'name must be 1-100 characters' }, 400)
+
+    const updated = await c.var.registry.updateApp(c.req.param('appId') ?? '', parsed.output.name)
+    if (updated === null) return c.json({ error: 'App not found' }, 404)
+    return c.json(updated)
+  }),
+)
+
 adminRoutes.get(
   '/api/apps/:appId',
   ...adminOnly(async (c) => {

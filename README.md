@@ -418,10 +418,12 @@ a session whose user is not an admin gets 403.
 | GET    | `/api/apps`               | List apps as `{ id, key, name, created_at }`         |
 | POST   | `/api/apps`               | Create an app from `{ "name": string }`, 201         |
 | GET    | `/api/apps/:appId`        | Read one app, without its secret                     |
+| PATCH  | `/api/apps/:appId`        | Rename an app from `{ "name": string }`              |
 | DELETE | `/api/apps/:appId`        | Delete an app, 204                                   |
 
 `POST /api/apps` is the only response that carries `secret`. The app `id` is 8 URL-safe
 characters, and `key` and `secret` are 32 hex characters each, all from `crypto.getRandomValues`.
+The `id` and `key` are immutable once created; only the name can change.
 
 Sign-up is refused with 403 while `signup_enabled` is off. The exception is an empty user table:
 the first account can always be created, so an operator who switches sign-up off cannot lock

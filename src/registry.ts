@@ -282,6 +282,15 @@ export class Registry extends DurableObject<Env> {
     return null
   }
 
+  updateApp(appId: string, name: string): AppRecord | null {
+    if (this.appById(appId) === null) return null
+    this.sql.exec('UPDATE app SET name = ? WHERE app_id = ?', name, appId)
+    const row = this.appById(appId)
+    return row === null
+      ? null
+      : { id: row.id, key: row.key, name: row.name, created_at: row.created_at }
+  }
+
   deleteApp(appId: string): boolean {
     if (this.appById(appId) === null) return false
     this.sql.exec('DELETE FROM app WHERE app_id = ?', appId)

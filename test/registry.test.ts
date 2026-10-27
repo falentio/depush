@@ -74,6 +74,13 @@ const appSchema = v.object({
   created_at: v.number(),
 })
 
+const appOverviewSchema = v.object({
+  id: v.string(),
+  key: v.string(),
+  name: v.string(),
+  created_at: v.number(),
+})
+
 function readUser(body: unknown): AuthUser {
   const parsed = v.safeParse(signUpBodySchema, body)
   if (!parsed.success) throw new Error(`sign-up did not return a user: ${JSON.stringify(body)}`)
@@ -197,6 +204,27 @@ describe('app CRUD', () => {
     const afterDelete = await readJsonList(client, '/api/apps')
     expect(afterDelete.some((entry) => entry.id === app.id)).toBe(false)
     expect((await as(client, `/api/apps/${app.id}`)).status).toBe(404)
+  })
+
+  it('renames an app and never returns its secret', async () => {
+    const client = await adminClient()
+    const app = await createApp(client, 'before')
+
+    const response = await as(client, `/api/apps/${app.id}`, {
+      ...json({ name: 'after' }),
+      method: 'PATCH',
+    })
+    expect(response.status).toBe(200)
+    const parsed = v.safeParse(appOverviewSchema, await response.json())
+    if (!parsed.success) throw new Error('app rename did not return an app overview')
+    expect(parsed.output.name).toBe('after')
+    expect(parsed.output).not.toHaveProperty('secret')
+
+    expect((await readJsonObject(client, `/api/apps/${app.id}`)).name).toBe('after')
+    expect(
+      (await as(client, '/api/apps/missing', { ...json({ name: 'after' }), method: 'PATCH' }))
+        .status,
+    ).toBe(404)
   })
 
   it('rejects a blank name and an unknown app', async () => {
