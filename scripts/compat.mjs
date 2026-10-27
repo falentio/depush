@@ -16,6 +16,10 @@ const APP_SECRET = 'test-secret'
 const CHANNEL = 'public-smoke'
 const PRIVATE_CHANNEL = 'private-room'
 const PRESENCE_CHANNEL = 'presence-room'
+const CACHE_CHANNEL = 'cache-smoke'
+const CACHE_EMPTY_CHANNEL = 'cache-empty'
+const PRIVATE_CACHE_CHANNEL = 'private-cache-room'
+const PRESENCE_CACHE_CHANNEL = 'presence-cache-room'
 const DEV_VARS = '.dev.vars'
 const DEV_VARS_BACKUP = '.dev.vars.compat-backup'
 const DEV_VARS_CONTENT = [
@@ -23,6 +27,7 @@ const DEV_VARS_CONTENT = [
   `PUSHER_APP_KEY=${APP_KEY}`,
   `PUSHER_APP_SECRET=${APP_SECRET}`,
   'PUSHER_ACTIVITY_TIMEOUT=1',
+  'PUSHER_CACHE_TTL_SECONDS=2',
   '',
 ].join('\n')
 
@@ -730,6 +735,208 @@ async function checkEncryptedPublish(baseUrl) {
   assert.match(String(payload.error), /Encrypted/)
 }
 
+async function checkCacheReplayBeforeSubscribe(server, port, authPort) {
+  await server.trigger(CACHE_CHANNEL, 'cached-greeting', { hello: 'cached' })
+
+  const client = createClient(port, authPort, 'alice')
+  clients.push(client)
+  const channel = client.subscribe(CACHE_CHANNEL)
+  const replayed = waitForEvent(channel, 'cached-greeting', 'the cached replay')
+  await waitForEvent(channel, 'pusher:subscription_succeeded', 'cache-smoke subscription')
+  assert.deepEqual(await replayed, { hello: 'cached' })
+  return channel
+}
+
+async function checkCacheInfo(server) {
+  const response = await server.get({
+    path: `/channels/${CACHE_CHANNEL}`,
+    params: { info: 'cache' },
+  })
+  assert.equal(response.status, 200)
+
+  const body = await response.json()
+  assert.equal(body.occupied, true)
+  assert.ok(body.cache !== null, 'cache info is null after a publish')
+  assert.deepEqual(JSON.parse(body.cache.data), { hello: 'cached' })
+  assert.ok(body.cache.ttl >= 0 && body.cache.ttl <= 2, `ttl ${body.cache.ttl} is outside 0..2`)
+
+  await assert.rejects(
+    () => server.get({ path: '/channels', params: { info: 'cache' } }),
+    (error) => {
+      assert.equal(error.status, 400)
+      return true
+    },
+  )
+  await assert.rejects(
+    () => server.get({ path: `/channels/${CHANNEL}`, params: { info: 'cache' } }),
+    (error) => {
+      assert.equal(error.status, 400)
+      return true
+    },
+  )
+}
+
+async function checkCacheUpdate(server, port, authPort, existingChannel) {
+  const live = waitForEvent(existingChannel, 'cached-update', 'the live cache update')
+  await server.trigger(CACHE_CHANNEL, 'cached-update', { hello: 'newer' })
+  assert.deepEqual(await live, { hello: 'newer' })
+
+  const client = createClient(port, authPort, 'bob')
+  clients.push(client)
+  const channel = client.subscribe(CACHE_CHANNEL)
+  const replayed = waitForEvent(channel, 'cached-update', 'the replay of the newer value')
+  await waitForEvent(channel, 'pusher:subscription_succeeded', 'the second cache subscriber')
+  assert.deepEqual(await replayed, { hello: 'newer' })
+}
+
+async function checkCacheMissOnEmpty(port, authPort) {
+  const client = createClient(port, authPort, 'carol')
+  clients.push(client)
+  const channel = client.subscribe(CACHE_EMPTY_CHANNEL)
+
+  let cached = false
+  channel.bind('cached-greeting', () => {
+    cached = true
+  })
+  const missed = waitForEvent(channel, 'pusher:cache_miss', 'cache_miss on cache-empty')
+  await waitForEvent(channel, 'pusher:subscription_succeeded', 'cache-empty subscription')
+  await missed
+  await delay(300)
+  assert.equal(cached, false, 'cache-empty replayed a cached event')
+}
+
+async function checkCacheExpiry(server, port, authPort) {
+  await delay(2200)
+
+  const response = await server.get({
+    path: `/channels/${CACHE_CHANNEL}`,
+    params: { info: 'cache' },
+  })
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.cache, null, 'the expired cache is still reported')
+
+  const client = createClient(port, authPort, 'alice')
+  clients.push(client)
+  const channel = client.subscribe(CACHE_CHANNEL)
+
+  let replayed = false
+  channel.bind('cached-update', () => {
+    replayed = true
+  })
+  const missed = waitForEvent(channel, 'pusher:cache_miss', 'cache_miss after the TTL')
+  await waitForEvent(channel, 'pusher:subscription_succeeded', 'expired cache subscription')
+  await missed
+  await delay(300)
+  assert.equal(replayed, false, 'an expired cache replayed its event')
+}
+
+async function checkPrivateCacheAuth(server, port, authPort) {
+  await server.trigger(PRIVATE_CACHE_CHANNEL, 'private-cached', { secret: 's1' })
+
+  const tamperedClient = createClient(port, authPort, 'tampered')
+  clients.push(tamperedClient)
+  let tamperedLeak = false
+  const tamperedChannel = tamperedClient.subscribe(PRIVATE_CACHE_CHANNEL)
+  tamperedChannel.bind('private-cached', () => {
+    tamperedLeak = true
+  })
+  await waitForPusherError(tamperedClient, 4009, 'the tampered private-cache subscription')
+  await delay(300)
+  assert.equal(tamperedLeak, false, 'a tampered subscriber received the private-cache event')
+  tamperedClient.disconnect()
+
+  const rawSocket = await openConnectedSocket()
+  try {
+    rawSocket.send(
+      JSON.stringify({ event: 'pusher:subscribe', data: { channel: PRIVATE_CACHE_CHANNEL } }),
+    )
+    await rawSocket.waitFor(
+      rawSocket.isPusherError(4009),
+      '4009 for an unauthenticated private-cache subscribe',
+    )
+    const close = await rawSocket.waitForClose('the unauthenticated private-cache close')
+    assert.equal(close.code, 4009)
+    const leaked = rawSocket.rawFrames
+      .map(parseJson)
+      .some((frame) => frame !== null && frame.event === 'private-cached')
+    assert.equal(leaked, false, 'an unauthenticated socket received the private-cache event')
+  } finally {
+    rawSocket.close()
+  }
+
+  await server.trigger(PRIVATE_CACHE_CHANNEL, 'private-cached', { secret: 's2' })
+
+  const client = createClient(port, authPort, 'alice')
+  clients.push(client)
+  const channel = client.subscribe(PRIVATE_CACHE_CHANNEL)
+  const order = []
+  channel.bind('pusher:subscription_succeeded', () => order.push('subscribed'))
+  channel.bind('private-cached', () => order.push('replayed'))
+  const replayed = waitForEvent(channel, 'private-cached', 'the authenticated private-cache replay')
+  await waitForEvent(channel, 'pusher:subscription_succeeded', 'private-cache subscription')
+  assert.deepEqual(await replayed, { secret: 's2' })
+  assert.deepEqual(order, ['subscribed', 'replayed'])
+
+  const secondClient = createClient(port, authPort, 'bob')
+  clients.push(secondClient)
+  const secondChannel = secondClient.subscribe(PRIVATE_CACHE_CHANNEL)
+  await waitForEvent(
+    secondChannel,
+    'pusher:subscription_succeeded',
+    'the second private-cache subscriber',
+  )
+  const shout = waitForEvent(secondChannel, 'client-shout', 'the private-cache client event')
+  channel.trigger('client-shout', { n: 1 })
+  assert.deepEqual(await shout, { n: 1 })
+
+  const thirdClient = createClient(port, authPort, 'carol')
+  clients.push(thirdClient)
+  const thirdChannel = thirdClient.subscribe(PRIVATE_CACHE_CHANNEL)
+  let shouted = false
+  thirdChannel.bind('client-shout', () => {
+    shouted = true
+  })
+  const replayAfterClientEvent = waitForEvent(
+    thirdChannel,
+    'private-cached',
+    'the replay after a client event',
+  )
+  await waitForEvent(
+    thirdChannel,
+    'pusher:subscription_succeeded',
+    'the third private-cache subscriber',
+  )
+  assert.deepEqual(await replayAfterClientEvent, { secret: 's2' })
+  await delay(300)
+  assert.equal(shouted, false, 'a client event replaced the private-cache HTTP event')
+}
+
+async function checkPresenceCacheReplay(server, port, authPort) {
+  await server.trigger(PRESENCE_CACHE_CHANNEL, 'presence-cached', { hello: 'presence' })
+
+  const client = createClient(port, authPort, 'dave')
+  clients.push(client)
+  const channel = client.subscribe(PRESENCE_CACHE_CHANNEL)
+  const order = []
+  channel.bind('pusher:subscription_succeeded', () => order.push('subscribed'))
+  channel.bind('presence-cached', () => order.push('replayed'))
+  const replayed = waitForEvent(channel, 'presence-cached', 'the presence-cache replay')
+  await waitForEvent(channel, 'pusher:subscription_succeeded', 'presence-cache subscription')
+  assert.deepEqual(await replayed, { hello: 'presence' })
+  assert.deepEqual(order, ['subscribed', 'replayed'])
+
+  const response = await server.get({
+    path: `/channels/${PRESENCE_CACHE_CHANNEL}`,
+    params: { info: 'cache,user_count' },
+  })
+  assert.equal(response.status, 200)
+  const body = await response.json()
+  assert.equal(body.occupied, true)
+  assert.equal(body.user_count, 1)
+  assert.deepEqual(JSON.parse(body.cache.data), { hello: 'presence' })
+}
+
 const checks = [
   ['pusher-js connects and subscribes to public-smoke', null],
   ['pusher SDK trigger reaches pusher-js', null],
@@ -759,6 +966,12 @@ const checks = [
   ['a 70 KiB text frame gets 4300 and the socket stays usable', null],
   ['an unauthenticated 300 KiB publish returns 413', null],
   ['a signed publish to an encrypted channel returns 400', null],
+  ['a publish to cache-smoke before subscribe replays to the first pusher-js subscriber', null],
+  ['GET /channels/<cache>?info=cache reports occupied, data, and a 0..2 ttl', null],
+  ['a second publish reaches live subscribers and the next cache replay', null],
+  ['a new subscriber to cache-empty gets pusher:cache_miss and no cached event', null],
+  ['after the TTL the cache info is null and a new subscriber misses', null],
+  ['private-cache and presence-cache replay after auth and ignore client events', null],
 ]
 
 const port = Number(process.env.PUSHER_COMPAT_PORT ?? (await findFreePort(DEFAULT_PORT)))
@@ -910,6 +1123,31 @@ try {
   await checkEncryptedPublish(baseUrl)
   checks[27][1] = true
   console.log(`PASS 28 ${checks[27][0]}`)
+
+  const cacheChannel = await checkCacheReplayBeforeSubscribe(pusherServer, port, authPort)
+  checks[28][1] = true
+  console.log(`PASS 29 ${checks[28][0]}`)
+
+  await checkCacheInfo(pusherServer)
+  checks[29][1] = true
+  console.log(`PASS 30 ${checks[29][0]}`)
+
+  await checkCacheUpdate(pusherServer, port, authPort, cacheChannel)
+  checks[30][1] = true
+  console.log(`PASS 31 ${checks[30][0]}`)
+
+  await checkCacheMissOnEmpty(port, authPort)
+  checks[31][1] = true
+  console.log(`PASS 32 ${checks[31][0]}`)
+
+  await checkCacheExpiry(pusherServer, port, authPort)
+  checks[32][1] = true
+  console.log(`PASS 33 ${checks[32][0]}`)
+
+  await checkPrivateCacheAuth(pusherServer, port, authPort)
+  await checkPresenceCacheReplay(pusherServer, port, authPort)
+  checks[33][1] = true
+  console.log(`PASS 34 ${checks[33][0]}`)
 } catch (error) {
   for (let index = 0; index < checks.length; index += 1) {
     if (checks[index][1] === null) {
