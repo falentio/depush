@@ -78,6 +78,7 @@ app.get('/app/:key', async (c) => {
       appKey: key,
       code: PUSHER_ERROR_NO_APP,
       path: c.req.path,
+      reason: 'unknown_app_key',
     })
     return upgradeRejected(c.req.raw, PUSHER_ERROR_NO_APP, 'Application does not exist')
   }
@@ -88,6 +89,7 @@ app.get('/app/:key', async (c) => {
       protocol: c.req.query('protocol') ?? 'none',
       code: rejection.code,
       path: c.req.path,
+      reason: 'protocol_rejected',
     })
     return upgradeRejected(c.req.raw, rejection.code, rejection.message)
   }
@@ -263,7 +265,11 @@ app.onError((error, c) => {
 
 app.notFound((c) => {
   if (isWebSocketUpgrade(c.req.raw)) {
-    log.request.warn('request_refused', { code: PUSHER_ERROR_PATH_NOT_FOUND, path: c.req.path })
+    log.request.warn('request_refused', {
+      code: PUSHER_ERROR_PATH_NOT_FOUND,
+      path: c.req.path,
+      reason: 'path_not_found',
+    })
     return upgradeRejected(c.req.raw, PUSHER_ERROR_PATH_NOT_FOUND, 'Path not found')
   }
   return c.json({ error: 'Not found' }, 404)
