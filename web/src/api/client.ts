@@ -22,12 +22,13 @@ export function createApi(http: Http) {
         }),
     },
     auth: {
-      readSession: () => http.json('GET', '/api/auth/get-session', sessionSchema),
+      readSession: () =>
+        http.json('GET', '/api/auth/get-session', sessionSchema, { expireSession: false }),
       signIn: (input: Credentials) =>
-        http.empty('POST', '/api/auth/sign-in/email', { body: input }),
+        http.empty('POST', '/api/auth/sign-in/email', { body: input, expireSession: false }),
       signUp: (input: SignUpInput) =>
-        http.empty('POST', '/api/auth/sign-up/email', { body: input }),
-      signOut: () => http.empty('POST', '/api/auth/sign-out', { body: {} }),
+        http.empty('POST', '/api/auth/sign-up/email', { body: input, expireSession: false }),
+      signOut: () => http.empty('POST', '/api/auth/sign-out', { body: {}, expireSession: false }),
     },
   }
 }

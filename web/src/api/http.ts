@@ -6,7 +6,7 @@ export type ApiPath = `/api${string}`
 export type JsonMethod = 'GET' | 'POST' | 'PATCH'
 export type EmptyMethod = 'POST' | 'DELETE'
 
-type RequestOptions = { body?: unknown }
+type RequestOptions = { body?: unknown; expireSession?: boolean }
 
 export type Http = {
   json<T>(
@@ -42,7 +42,7 @@ export function createHttp(): Http {
     }
   }
 
-  async function fail(path: ApiPath, response: Response): Promise<never> {
+  async function fail(response: Response, expireSession: boolean): Promise<never> {
     const body = await response.text().catch(() => '')
     let message = response.statusText || `Request failed with ${response.status}`
 
@@ -53,12 +53,10 @@ export function createHttp(): Http {
           const serverMessage = parsed.output.error ?? parsed.output.message
           if (serverMessage !== undefined && serverMessage !== '') message = serverMessage
         }
-      } catch {
-        // A non-JSON error body keeps the status text.
-      }
+      } catch {}
     }
 
-    if (response.status === 401 && !path.startsWith('/api/auth/')) {
+    if (response.status === 401 && expireSession) {
       sessionExpired?.()
     }
 
@@ -68,7 +66,7 @@ export function createHttp(): Http {
   return {
     async json(method, path, schema, options) {
       const response = await send(method, path, options)
-      if (!response.ok) return fail(path, response)
+      if (!response.ok) return fail(response, options?.expireSession !== false)
 
       let body: unknown
       try {
@@ -84,7 +82,7 @@ export function createHttp(): Http {
 
     async empty(method, path, options) {
       const response = await send(method, path, options)
-      if (!response.ok) return fail(path, response)
+      if (!response.ok) return fail(response, options?.expireSession !== false)
       await response.text()
     },
 

@@ -65,14 +65,17 @@ describe('createHttp', () => {
     await expect(http.empty('DELETE', '/api/apps/abcdefgh')).resolves.toBeUndefined()
   })
 
-  it('does not expire the session on a 401 from an auth path', async () => {
+  it('does not expire the session when the caller opts out', async () => {
     stubFetch(respond('{"message":"Invalid email or password"}', 401, 'Unauthorized'))
     const http = createHttp()
     const expired = vi.fn()
     http.onSessionExpired(expired)
 
     await expect(
-      http.empty('POST', '/api/auth/sign-in/email', { body: { email: 'a', password: 'b' } }),
+      http.empty('POST', '/api/auth/sign-in/email', {
+        body: { email: 'a', password: 'b' },
+        expireSession: false,
+      }),
     ).rejects.toMatchObject({
       kind: 'http',
       status: 401,
