@@ -7,6 +7,7 @@ import {
   redirect,
   useRouter,
 } from '@tanstack/react-router'
+import { useEffect, useRef } from 'react'
 import { toApiError } from '@/api/errors'
 import { requireAccess } from '@/auth/guard'
 import { landingFor } from '@/auth/policy'
@@ -17,6 +18,7 @@ import { ConsoleLayout } from '@/components/layout/console-layout'
 import { RootLayout } from '@/components/layout/root-layout'
 import { BootSplash, ErrorPanel, OfflineScreen, PageSkeleton } from '@/components/states'
 import { Button } from '@/components/ui/button'
+import { useOnline } from '@/lib/use-online'
 import { AppsPage, AppsSkeleton } from '@/routes/apps'
 import { ForbiddenPage } from '@/routes/forbidden'
 import { NotFoundPage } from '@/routes/not-found'
@@ -134,6 +136,18 @@ function landingRedirect(auth: SettledAuth): never {
 
 function RootError({ error, reset }: ErrorComponentProps) {
   const router = useRouter()
+  const online = useOnline()
+  const wasOffline = useRef(!online)
+
+  useEffect(() => {
+    if (!online) {
+      wasOffline.current = true
+      return
+    }
+    if (!wasOffline.current) return
+    wasOffline.current = false
+    void router.options.context.authStore.refresh().then(() => router.invalidate())
+  }, [online, router])
 
   if (isAuthUnavailableError(error)) {
     return (

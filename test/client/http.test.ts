@@ -105,7 +105,9 @@ describe('createHttp', () => {
       message: 'Forbidden',
     })
 
-    stubFetch(respond('{"message":"An account with that email already exists."}', 422, 'Unprocessable'))
+    stubFetch(
+      respond('{"message":"An account with that email already exists."}', 422, 'Unprocessable'),
+    )
     const duplicate = createHttp()
     await expect(
       duplicate.empty('POST', '/api/auth/sign-up/email', { body: {} }),

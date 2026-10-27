@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import indexSource from '../../index.html?raw'
 import wranglerSource from '../../wrangler.jsonc?raw'
 import { assertRouteNamespace, isWorkerPath, paths, WORKER_PREFIXES } from '@/app/paths'
 import { RUN_WORKER_FIRST } from '@/app/worker-routes'
+import { THEME_STORAGE_KEY } from '@/lib/theme'
 
 const wrangler = JSON.parse(wranglerSource) as {
   assets: { run_worker_first: string[] }
@@ -42,5 +44,12 @@ describe('client paths', () => {
       '/app/*',
       '/healthz',
     ])
+  })
+})
+
+describe('theme boot script', () => {
+  it('uses the same storage key before paint', () => {
+    expect(THEME_STORAGE_KEY).toBe('depush:theme')
+    expect(indexSource).toContain(THEME_STORAGE_KEY)
   })
 })

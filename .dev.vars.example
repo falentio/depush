@@ -1,4 +1,5 @@
 BETTER_AUTH_SECRET=replace-with-a-long-random-string
+# Must match the origin the console is served on: 5173 for pnpm dev, 4173 for pnpm preview.
 BETTER_AUTH_URL=http://localhost:5173
 PUSHER_ACTIVITY_TIMEOUT=120
 PUSHER_CACHE_TTL_SECONDS=1800
