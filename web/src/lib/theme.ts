@@ -46,11 +46,10 @@ export function applyTheme(theme: Theme): 'light' | 'dark' {
 
 export function useTheme() {
   const [theme, setThemeState] = useState<Theme>(readStoredTheme)
-  const [resolved, setResolved] = useState<'light' | 'dark'>(() => resolveTheme(readStoredTheme()))
 
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)')
-    const sync = () => setResolved(applyTheme(theme))
+    const sync = () => applyTheme(theme)
     sync()
     media.addEventListener('change', sync)
     return () => media.removeEventListener('change', sync)
@@ -66,5 +65,5 @@ export function useTheme() {
     return next
   }, [setTheme, theme])
 
-  return { theme, resolved, setTheme, cycle }
+  return { theme, setTheme, cycle }
 }
