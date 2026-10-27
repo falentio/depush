@@ -2,15 +2,20 @@
 
 depush is a self-hosted Pusher Channels server that runs as one Cloudflare Worker. It speaks
 protocol v7, and the official `pusher-js` 8.x client and the official `pusher` Node server SDK
-talk to it without changes. One deployment serves one app.
+talk to it without changes. One deployment serves any number of apps, each with its own id, key,
+and secret.
 
 You point a client at your Worker instead of Pusher's edge, and your application server keeps
 signing the channel auth it already signs. There is no Pusher account in the path.
 
+Apps live in a Registry Durable Object, not in environment variables. The first account to sign up
+becomes the admin, and that admin creates apps through a small JSON API at `/api`. There is no
+dashboard UI.
+
 ## What it is not
 
-depush has no dashboard, accounts, teams, quotas, or billing. The protocol surface covers publish,
-batch publish, channel queries, presence, cache channels, and client events, plus two signed depush
+depush has no dashboard, teams, quotas, or billing. The protocol surface covers publish, batch
+publish, channel queries, presence, cache channels, and client events, plus two signed depush
 extensions for per-channel history and presence info. These are not implemented:
 
 - Webhooks.
@@ -51,8 +56,8 @@ pnpm install
 cp .dev.vars.example .dev.vars
 ```
 
-Set `PUSHER_APP_ID`, `PUSHER_APP_KEY`, and `PUSHER_APP_SECRET` in `.dev.vars`. Then start the
-dev server:
+Set `BETTER_AUTH_SECRET` in `.dev.vars` to a long random string. Every other value in that file is
+optional. Then start the dev server:
 
 ```sh
 pnpm dev
@@ -64,6 +69,30 @@ Vite serves the Worker on `http://localhost:5173`. Check it:
 curl http://localhost:5173/healthz
 # {"status":"ok"}
 ```
+
+The first account you sign up becomes the admin. Create it, then use its session cookie to create
+an app. better-auth requires an `Origin` header, so send one that matches the server:
+
+```sh
+ORIGIN='http://localhost:5173'
+
+curl -c cookies.txt -X POST "$ORIGIN/api/auth/sign-up/email" \
+  -H 'content-type: application/json' -H "origin: $ORIGIN" \
+  -d '{"email":"owner@example.com","password":"correct-horse-battery","name":"Owner"}'
+
+curl -b cookies.txt -X POST "$ORIGIN/api/apps" \
+  -H 'content-type: application/json' -H "origin: $ORIGIN" \
+  -d '{"name":"my app"}'
+# {"id":"cynwips0","key":"13f8…","secret":"4096…","name":"my app","created_at":1793103868325}
+```
+
+The sign-up response carries `"role":"admin"`. If it says `"role":"user"`, this registry already
+had an account, so sign in as that first account instead. Remove `.wrangler/state/v3/do/depush-Registry`
+to start the local registry over.
+
+The response carries the app's `id`, `key`, and `secret` once. Later reads never return the secret,
+so record it before you close the terminal. Use that `id` and `key` in the snippets below, and keep
+the secret on your app server as `DEPUSH_APP_ID`, `DEPUSH_APP_KEY`, and `DEPUSH_APP_SECRET`.
 
 Subscribe from a browser or from Node with the official client. Locally the socket is plain
 `ws`, so `forceTLS` stays `false`.
@@ -103,18 +132,29 @@ await server.trigger('public-smoke', 'greeting', { hello: 'world' })
 
 ## Deploy
 
-Log in, then store the three credentials as Worker secrets:
+Log in, then store the auth secret:
 
 ```sh
 pnpm exec wrangler login
-pnpm exec wrangler secret put PUSHER_APP_ID
-pnpm exec wrangler secret put PUSHER_APP_KEY
-pnpm exec wrangler secret put PUSHER_APP_SECRET
+pnpm exec wrangler secret put BETTER_AUTH_SECRET
 ```
 
-`PUSHER_APP_ID` is the id in the HTTP path, `/apps/:appId/events`. `PUSHER_APP_KEY` is the key the
-client connects with. `PUSHER_APP_SECRET` signs HTTP requests and channel authorizations. Keep the
-secret on the Worker and your app server, never in a client.
+The value is any long random string, for example the output of `openssl rand -base64 32`. Session
+cookies are signed with it, so changing it signs every admin out.
+
+Apps are not Worker secrets. They live in the Registry Durable Object, and you create them through
+`/api/apps` after deploying, as in the Quickstart. An app's `id` is the id in the HTTP path,
+`/apps/:appId/events`. Its `key` is the key the client connects with. Its `secret` signs HTTP
+requests and channel authorizations. Keep the secret on your app server, never in a client.
+
+Optional, set the public origin the admin API trusts:
+
+```sh
+pnpm exec wrangler secret put BETTER_AUTH_URL
+```
+
+Set it to your Worker URL, such as `https://depush.example.com`. Without it the Worker uses the
+origin of the incoming request.
 
 Optional, set the ping interval the client receives in `pusher:connection_established`:
 
@@ -141,7 +181,7 @@ Build and deploy:
 pnpm deploy
 ```
 
-The command runs the Vite build and then `wrangler deploy`, which applies the `v1` and `v2`
+The command runs the Vite build and then `wrangler deploy`, which applies the `v1`, `v2`, and `v3`
 Durable Object migrations and prints the Worker URL. To serve it on your own hostname, add a
 custom domain or route for the Worker in the Cloudflare dashboard. The zone must belong to the
 same account.
@@ -174,9 +214,9 @@ The Node SDK takes the same destination as `host`, `port`, and `useTLS`:
 
 ```js
 const server = new PusherServer({
-  appId: process.env.PUSHER_APP_ID,
-  key: process.env.PUSHER_APP_KEY,
-  secret: process.env.PUSHER_APP_SECRET,
+  appId: process.env.DEPUSH_APP_ID,
+  key: process.env.DEPUSH_APP_KEY,
+  secret: process.env.DEPUSH_APP_SECRET,
   host: 'depush.example.com',
   port: '443',
   useTLS: true,
@@ -201,9 +241,9 @@ import PusherServer from 'pusher'
 
 const app = express()
 const pusher = new PusherServer({
-  appId: process.env.PUSHER_APP_ID,
-  key: process.env.PUSHER_APP_KEY,
-  secret: process.env.PUSHER_APP_SECRET,
+  appId: process.env.DEPUSH_APP_ID,
+  key: process.env.DEPUSH_APP_KEY,
+  secret: process.env.DEPUSH_APP_SECRET,
   host: 'depush.example.com',
   port: '443',
   useTLS: true,
@@ -361,6 +401,32 @@ works because it is a presence channel. The Pusher-compatible
 Presence info is not durable. It follows the live sockets, so it is empty once the last member
 leaves, and history does not replay membership.
 
+## Admin API
+
+Admin routes read a better-auth session cookie. The first account to sign up holds
+`role = 'admin'`; every later account gets `role = 'user'`. A request with no session gets 401, and
+a session whose user is not an admin gets 403.
+
+| Method | Path                 | Purpose                                                  |
+| ------ | -------------------- | -------------------------------------------------------- |
+| POST   | `/api/auth/sign-up/email` | Create an account. Body: `email`, `password`, `name` |
+| POST   | `/api/auth/sign-in/email` | Sign in and receive the session cookie               |
+| POST   | `/api/auth/sign-out`      | Clear the session                                    |
+| GET    | `/api/auth/get-session`   | Read the signed-in user, including `role`            |
+| GET    | `/api/settings`           | `{ "signup_enabled": boolean }`                      |
+| PATCH  | `/api/settings`           | Set `signup_enabled`                                 |
+| GET    | `/api/apps`               | List apps as `{ id, key, name, created_at }`         |
+| POST   | `/api/apps`               | Create an app from `{ "name": string }`, 201        |
+| GET    | `/api/apps/:appId`        | Read one app, without its secret                     |
+| DELETE | `/api/apps/:appId`        | Delete an app, 204                                   |
+
+`POST /api/apps` is the only response that carries `secret`. The app `id` is 8 URL-safe
+characters, and `key` and `secret` are 32 hex characters each, all from `crypto.getRandomValues`.
+
+Sign-up is refused with 403 while `signup_enabled` is off. The exception is an empty user table:
+the first account can always be created, so an operator who switches sign-up off cannot lock
+themselves out.
+
 ## API
 
 | Method | Path                                          | Auth            | Purpose                                |
@@ -427,7 +493,7 @@ channel.
 
 | Where           | Code   | Meaning                                                                                                                                |
 | --------------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------- |
-| WebSocket close | `4001` | The `:key` does not match `PUSHER_APP_KEY`                                                                                             |
+| WebSocket close | `4001` | No app in the registry has that `:key`                                                                                                 |
 | WebSocket close | `4005` | The upgrade path is not a route                                                                                                        |
 | WebSocket close | `4007` | The `protocol` parameter is present but not `7`                                                                                        |
 | WebSocket close | `4008` | The `protocol` parameter is missing                                                                                                    |
@@ -435,7 +501,7 @@ channel.
 | `pusher:error`  | `4300` | A bad frame, an invalid channel name, a text frame over 64 KiB, a client event on a channel you do not own, or data over 10 KB         |
 | `pusher:error`  | `4301` | More than 10 client events in one second                                                                                               |
 | HTTP            | `400`  | Invalid JSON, payload, event name, or channel name; publish `info`; unsupported `info`; or a plain HTTP request to `/app/:key`         |
-| HTTP            | `401`  | Wrong app id in the path, `auth_key`, `auth_version`, a timestamp that is not all digits or is outside 600 s, `body_md5`, or signature |
+| HTTP            | `401`  | Unknown app id in the path, `auth_key`, `auth_version`, a timestamp that is not all digits or is outside 600 s, `body_md5`, or signature |
 | HTTP            | `413`  | Event data over 10,240 bytes, or a request body over 256 KiB                                                                           |
 
 A channel auth failure sends `pusher:error` 4009 and then closes the socket with 4009. The 4300
@@ -458,7 +524,7 @@ and 4301 errors leave the connection open.
 | History retention         | 24 hours per channel                            |
 | Events kept per channel   | 1000, oldest dropped first                      |
 | History page size         | 1 to 100, default 50                            |
-| Apps per deployment       | 1                                               |
+| Apps per deployment       | No fixed limit; each app is one registry row     |
 
 Presence state lives in the live sockets. The presence-info route reads that state, so it is
 gone when the last socket leaves and the Durable Object is evicted, and nothing replays it.
@@ -469,13 +535,17 @@ the last 24 hours, up to 1000 events per channel.
 
 ## Operations
 
-One `AppHub` Durable Object per app, named from `PUSHER_APP_ID`, writes all sockets and channel
-membership. The WebSocket route and the HTTP publish and query routes reach the same object, so a
+One `Registry` Durable Object per deployment, named `registry`, owns the app table, the settings
+row, and better-auth's `user`, `session`, `account`, and `verification` tables. It is the only
+writer for all of them, so the first sign-up can claim `role = 'admin'` without a race.
+
+One `AppHub` Durable Object per app, named from the app's registry id, writes all sockets and
+channel membership. The WebSocket route and the HTTP publish and query routes reach the same object, so a
 publish always sees the subscriptions in one place. The object accepts hibernatable sockets:
 membership lives in each socket's attachment, and a restarted object rebuilds it from the live
 sockets.
 
-One `Channel` Durable Object per app and channel, named `<PUSHER_APP_ID>:<channel>`, owns the
+One `Channel` Durable Object per app and channel, named `<app id>:<channel>`, owns the
 durable per-channel cache and the `events` history table. A WebSocket can only live in one
 Durable Object, so `AppHub` keeps the sockets and presence while `Channel` keeps durable state.
 `AppHub` reaches a channel object over RPC on every publish, the history route queries it, and the
@@ -485,12 +555,14 @@ Every channel records history, so every publish reaches a `Channel` object. Only
 name uses a cache prefix updates the cache row; history records all of them. Both tables live in
 the `Channel` object's SQLite database, `cache` and `events`, and neither is stored in `AppHub`.
 
-There is no D1 database and no other store. Changing `PUSHER_APP_ID` points the Worker at a fresh,
-empty hub and fresh, empty channel objects, so one app's cache and history are never served to
-another.
+Each app's id names its hub and channel objects, so one app's cache and history are never served
+to another. There is no D1 database and no other store.
 
-The `v1` migration creates the `AppHub` class as SQLite-backed, and the `v2` migration creates
-`Channel` the same way, which the Workers free plan supports. The `events` table and the `cache`
+Deleting an app removes its registry row and nothing else. Its `AppHub` and `Channel` objects keep
+their storage, unreachable because the id and key they were named from are gone.
+
+The `v1` migration creates the `AppHub` class as SQLite-backed, the `v2` migration creates
+`Channel` the same way, and `v3` creates `Registry`, which the Workers free plan supports. The `events` table and the `cache`
 table are created inside each `Channel` instance on first use, so they need no migration of their
 own. A deployed Worker only applies migration tags it has not seen, so to rename a class or change
 its storage type, add a migration with a new tag. Editing an existing tag in place does not update
@@ -522,20 +594,22 @@ pnpm exec wrangler deploy --dry-run     # Check the deploy bundle and bindings
 pnpm compat                             # Run the official SDKs against a local server
 ```
 
-`pnpm compat` starts its own dev server and local auth server with test credentials. It backs up
-`.dev.vars`, writes test values, plays the application server for private and presence auth, runs
-the checks, and restores the file. Set `PUSHER_COMPAT_PORT` to choose the server port. It uses
+`pnpm compat` starts its own dev server and local auth server. It backs up `.dev.vars`, writes test
+values including `BETTER_AUTH_SECRET`, signs up the owner account, creates an app through
+`/api/apps`, plays the application server for private and presence auth with that app's
+credentials, runs the checks, and restores the file. Set `PUSHER_COMPAT_PORT` to choose the server port. It uses
 8787 when that port is free and the next free port otherwise.
 
-`pnpm test:compat` starts its own dev server, writes test credentials to `.dev.vars`, runs the Node
-Vitest suite in `test/compat`, and restores the file afterwards. It starts at port 8792 and takes
+`pnpm test:compat` starts its own dev server, writes test values to `.dev.vars`, bootstraps an app
+through the admin API, runs the Node Vitest suite in `test/compat` against it, and restores the
+file afterwards. It starts at port 8792 and takes
 the next free port unless `PUSHER_COMPAT_PORT` is set. To compare the same signed HTTP calls
 against Pusher Cloud, export `PUSHER_CLOUD_APP_ID`, `PUSHER_CLOUD_APP_KEY`, and
 `PUSHER_CLOUD_APP_SECRET`; the cloud block is skipped when any is missing. The suite reads those
 variables from the environment and never writes them to a file. Do not commit them.
 
-`pnpm fuzz` starts its own dev server with test credentials, so it sends no requests to Pusher
-Cloud and needs no auth server. It drives the Worker over HTTP and WebSocket with cases generated
+`pnpm fuzz` starts its own dev server and bootstraps an app through the admin API, so it sends no
+requests to Pusher Cloud and needs no auth server. It drives the Worker over HTTP and WebSocket with cases generated
 from one seed. It reports a finding and exits 1 on a 5xx response, a non-JSON response from
 `/apps` or `/healthz`, a timeout, an unexpected WebSocket close, or a server exit. The allowed
 WebSocket closes are 1000, 4001, 4005, 4007, 4008, and 4009. It backs up `.dev.vars` to
@@ -561,9 +635,12 @@ Run `pnpm cf-typegen` after you change `wrangler.jsonc`, then commit the regener
 ```text
 Worker (src/index.ts) [1]
 ├── GET /healthz [1a] → {"status":"ok"}
+├── /api/auth/* → better-auth handler [1f] → Registry adapter [1f1]
+├── GET/PATCH /api/settings, /api/apps [1g] → admin gate → Registry [1g1]
 ├── GET /app/:key?protocol=7 [1b]
-│   ├── handshake check [1b1] → 4001, 4007, 4008 before the hub
-│   └── AppHub.fetch [1b2]
+│   ├── Registry.appByKey [1b0] → 4001 when there is no such app
+│   ├── handshake check [1b1] → 4007, 4008 before the hub
+│   └── AppHub.init(config) then AppHub.fetch [1b2]
 │       ├── ctx.acceptWebSocket [1b2a]
 │       ├── serializeAttachment({ socketId, subscriptions }) [1b2b]
 │       ├── webSocketMessage [1b2c] → parseFrame: subscribe, unsubscribe, ping, client event
@@ -571,7 +648,7 @@ Worker (src/index.ts) [1]
 │       │   └── client event → Channel.record with cache off [1b2c2]
 │       └── webSocketClose [1b2d] → leavePresence → member_removed
 ├── POST /apps/:appId/events [1c]
-│   └── verifyRequest → parseTrigger → AppHub.broadcast [1c1]
+│   └── Registry.appById → verifyRequest → parseTrigger → AppHub.broadcast [1c1]
 │       ├── Channel.record for every channel, cache flag for cache names [1c1a]
 │       └── fan out to AppHub sockets [1c1b]
 ├── POST /apps/:appId/batch_events [1d]
@@ -584,14 +661,17 @@ Worker (src/index.ts) [1]
 ```
 
 The signed HTTP path and the socket path meet at the same `AppHub` instance, whose id is
-`idFromName(PUSHER_APP_ID)`. Every channel also meets a `Channel` instance, whose id is
+`idFromName(app id)`. Every channel also meets a `Channel` instance, whose id is
 `idFromName(<app id>:<channel>)`, on publish and on the history route.
 
 ## Troubleshooting
 
 | Symptom                                       | Cause                                                              | Fix                                                                                                                                             |
 | --------------------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------- |
-| Close `4001`, "Application does not exist"    | The client key is not `PUSHER_APP_KEY`                             | Use the key from the same app as the Worker                                                                                                     |
+| Close `4001`, "Application does not exist"    | No app in the registry has that key                                | Create an app under `POST /api/apps` and use its key                                                                                            |
+| Admin API `401`                               | No session cookie                                                  | Sign in through `/api/auth/sign-in/email` and send the cookie                                                                                   |
+| Admin API `403`                               | The session belongs to a non-admin                                 | Use the first account, which holds `role = 'admin'`                                                                                             |
+| Sign-up `403`, "Sign-up is disabled"          | `signup_enabled` is off                                            | Turn it back on from an admin session with `PATCH /api/settings`                                                                                |
 | Close `4008`                                  | No `protocol` query parameter                                      | Use official `pusher-js`, or add `protocol=7`. A proxy can strip the query                                                                      |
 | Close `4007`                                  | The protocol is not `7`                                            | Use `pusher-js` 8.x, which sends `7`                                                                                                            |
 | Close `4009`                                  | Channel auth rejected, or an encrypted channel                     | Sign `socket_id:channel`, check the key and secret, and send back the exact `channel_data`                                                      |
