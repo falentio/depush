@@ -55,8 +55,12 @@ export function channelObjectName(appId: string, channel: string): string {
 }
 
 export function channelScope(objectName: string | undefined): { appId: string; channel: string } {
-  const [appId = 'unknown', channel = 'unknown'] = (objectName ?? '').split(':')
-  return { appId: appId === '' ? 'unknown' : appId, channel: channel === '' ? 'unknown' : channel }
+  const [appId = 'unknown', ...rest] = (objectName ?? '').split(':')
+  const channel = rest.join(':')
+  return {
+    appId: appId === '' ? 'unknown' : appId,
+    channel: channel === '' ? 'unknown' : channel,
+  }
 }
 
 export class Channel extends DurableObject<AppBindings> {
