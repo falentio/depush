@@ -24,6 +24,7 @@ type SignUpError = { message: string; showSignIn: boolean }
 export function SignUpPage() {
   const { authStore } = route.useRouteContext()
   const [error, setError] = useState<SignUpError | null>(null)
+  const [invalidField, setInvalidField] = useState<'email' | null>(null)
   const [pending, setPending] = useState(false)
   const [visible, setVisible] = useState(false)
 
@@ -33,6 +34,7 @@ export function SignUpPage() {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
     setError(null)
+    setInvalidField(null)
     setPending(true)
     try {
       await authStore.signUp({
@@ -42,6 +44,7 @@ export function SignUpPage() {
       })
     } catch (cause) {
       const showSignIn = isApiError(cause) && cause.status === 403
+      setInvalidField(isApiError(cause) && cause.status === 422 ? 'email' : null)
       setError({
         message: formAuthError(cause, { duplicateEmail: true }),
         showSignIn,
@@ -55,7 +58,9 @@ export function SignUpPage() {
     <div className="w-full max-w-sm">
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Create an account</CardTitle>
+          <CardTitle as="h1" className="text-xl">
+            Create an account
+          </CardTitle>
           <CardDescription>
             The first account becomes the admin. Later accounts can sign in but cannot manage apps.
           </CardDescription>
@@ -64,13 +69,7 @@ export function SignUpPage() {
           <form onSubmit={onSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="sign-up-name">Name</Label>
-              <Input
-                id="sign-up-name"
-                name="name"
-                autoComplete="name"
-                required
-                aria-invalid={error !== null}
-              />
+              <Input id="sign-up-name" name="name" autoComplete="name" required />
             </div>
             <div className="space-y-2">
               <Label htmlFor="sign-up-email">Email</Label>
@@ -80,7 +79,8 @@ export function SignUpPage() {
                 type="email"
                 autoComplete="email"
                 required
-                aria-invalid={error !== null}
+                aria-invalid={invalidField === 'email'}
+                aria-describedby={invalidField === 'email' ? 'sign-up-error' : undefined}
               />
             </div>
             <div className="space-y-2">
@@ -93,7 +93,6 @@ export function SignUpPage() {
                   autoComplete="new-password"
                   required
                   className="pr-10"
-                  aria-invalid={error !== null}
                 />
                 <button
                   type="button"
@@ -108,7 +107,7 @@ export function SignUpPage() {
               </div>
             </div>
             {error === null ? null : (
-              <p role="alert" className="text-sm text-destructive">
+              <p id="sign-up-error" role="alert" className="text-sm text-destructive">
                 {error.message}
                 {error.showSignIn ? (
                   <>

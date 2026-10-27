@@ -48,7 +48,9 @@ export function SignInPage() {
     <div className="w-full max-w-sm space-y-4">
       <Card>
         <CardHeader>
-          <CardTitle className="text-xl">Sign in to depush</CardTitle>
+          <CardTitle as="h1" className="text-xl">
+            Sign in to depush
+          </CardTitle>
           <CardDescription>
             Manage the apps that publish and subscribe through this server.
           </CardDescription>
@@ -71,7 +73,6 @@ export function SignInPage() {
                 type="email"
                 autoComplete="email"
                 required
-                aria-invalid={error !== null}
                 aria-describedby={error === null ? undefined : 'sign-in-error'}
               />
             </div>
@@ -85,7 +86,6 @@ export function SignInPage() {
                   autoComplete="current-password"
                   required
                   className="pr-10"
-                  aria-invalid={error !== null}
                   aria-describedby={error === null ? undefined : 'sign-in-error'}
                 />
                 <button

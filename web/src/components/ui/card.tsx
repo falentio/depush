@@ -20,9 +20,13 @@ export function CardHeader({ className, ...props }: React.ComponentProps<'div'>)
   )
 }
 
-export function CardTitle({ className, ...props }: React.ComponentProps<'div'>) {
+export function CardTitle({
+  as: Component = 'div',
+  className,
+  ...props
+}: React.ComponentProps<'div'> & { as?: 'div' | 'h1' | 'h2' }) {
   return (
-    <div
+    <Component
       data-slot="card-title"
       className={cn('text-base font-semibold leading-none tracking-tight', className)}
       {...props}
