@@ -50,14 +50,14 @@ export function useTheme() {
 
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)')
-    const sync = () => setResolved(resolveTheme(theme))
+    const sync = () => setResolved(applyTheme(theme))
+    sync()
     media.addEventListener('change', sync)
     return () => media.removeEventListener('change', sync)
   }, [theme])
 
   const setTheme = useCallback((next: Theme) => {
     setThemeState(next)
-    setResolved(applyTheme(next))
   }, [])
 
   const cycle = useCallback(() => {
