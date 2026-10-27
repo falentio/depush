@@ -10,10 +10,8 @@ export type Auth =
   | { state: 'user'; user: User }
   | { state: 'unavailable'; error: ApiError }
 
-/** The probe finished. `pending` never escapes the store's ensure(). */
 export type ProbedAuth = Exclude<Auth, { state: 'pending' }>
 
-/** A probe finished with an answer the guards can use. */
 export type SettledAuth = Extract<Auth, { state: 'anonymous' | 'admin' | 'user' }>
 
 export type AccessState = SettledAuth['state']

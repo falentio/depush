@@ -104,7 +104,6 @@
   }
 }
 
-/* Dialogs stay centered (unlike popovers, which scale from their trigger). */
 [data-slot="dialog-overlay"][data-state="open"],
 [data-slot="alert-dialog-overlay"][data-state="open"] {
   animation: overlay-in 150ms ease-out;

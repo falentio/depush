@@ -2,16 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type CopyState = 'idle' | 'copied' | 'failed'
 
-/** Clipboard API first, a hidden textarea on non-secure origins, never a throw. */
 export async function copyText(value: string): Promise<boolean> {
   try {
     if (navigator.clipboard !== undefined && window.isSecureContext) {
       await navigator.clipboard.writeText(value)
       return true
     }
-  } catch {
-    // Fall through to the selection-based copy.
-  }
+  } catch {}
 
   try {
     const field = document.createElement('textarea')

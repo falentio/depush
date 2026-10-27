@@ -5,10 +5,6 @@ import type { SettledAuth } from './types'
 
 type GuardContext = { context: { auth: SettledAuth }; location: { pathname: string } }
 
-/**
- * A redirect thrown here runs in route validation, before the loader, so a
- * non-admin never fetches admin data.
- */
 export function requireAccess(requirement: Requirement) {
   return ({ context, location }: GuardContext): void => {
     const decision = decide(context.auth, requirement)
@@ -18,7 +14,6 @@ export function requireAccess(requirement: Requirement) {
   }
 }
 
-/** The only way into sign-in from a guarded deep link; an open redirect is unrepresentable. */
 export function signInRedirect(location: { pathname: string }): never {
   throw redirect({
     to: paths.signIn,

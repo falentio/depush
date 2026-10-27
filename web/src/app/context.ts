@@ -11,10 +11,6 @@ export type ConsoleApp = {
 
 export type RouterContext = ConsoleApp
 
-/**
- * The one place the transport, the API, and the auth store meet. The HTTP layer
- * reports a 401 from an admin path to the store; `/api/auth/*` is excluded there.
- */
 export function createApp(): ConsoleApp {
   const http = createHttp()
   const api = createApi(http)

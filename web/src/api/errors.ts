@@ -50,10 +50,6 @@ const SERVER_ERROR: ErrorCopy = {
   action: 'retry',
 }
 
-/**
- * Status is the only thing that selects copy. The server's own message stays
- * the inline text on a form, where the operator needs the exact reason.
- */
 export function errorCopy(error: ApiError): ErrorCopy {
   if (error.kind === 'network') {
     return {

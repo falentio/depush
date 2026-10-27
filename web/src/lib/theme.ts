@@ -32,9 +32,7 @@ export function applyTheme(theme: Theme): 'light' | 'dark' {
   try {
     if (theme === 'system') localStorage.removeItem(THEME_STORAGE_KEY)
     else localStorage.setItem(THEME_STORAGE_KEY, theme)
-  } catch {
-    // A blocked storage still lets the theme apply for this page.
-  }
+  } catch {}
 
   const color = dark ? DARK_THEME_COLOR : LIGHT_THEME_COLOR
   for (const meta of document.querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')) {
