@@ -1,12 +1,26 @@
 import * as v from 'valibot'
 
-declare const brand: unique symbol
+const appIdSchema = v.pipe(
+  v.string(),
+  v.regex(/^[a-z0-9]{8}$/, 'app id is not valid'),
+  v.brand('AppId'),
+)
 
-type Brand<T, B extends string> = T & { readonly [brand]: B }
+const appKeySchema = v.pipe(
+  v.string(),
+  v.regex(/^[0-9a-f]{32}$/, 'app key is not valid'),
+  v.brand('AppKey'),
+)
 
-export type AppId = Brand<string, 'AppId'>
-export type AppKey = Brand<string, 'AppKey'>
-export type AppSecret = Brand<string, 'AppSecret'>
+const appSecretSchema = v.pipe(
+  v.string(),
+  v.regex(/^[0-9a-f]{32}$/, 'app secret is not valid'),
+  v.brand('AppSecret'),
+)
+
+export type AppId = v.InferOutput<typeof appIdSchema>
+export type AppKey = v.InferOutput<typeof appKeySchema>
+export type AppSecret = v.InferOutput<typeof appSecretSchema>
 
 export type App = {
   id: AppId
@@ -20,24 +34,6 @@ export type IssuedApp = App & { secret: AppSecret }
 export type Settings = { signupEnabled: boolean }
 
 export type User = { id: string; email: string; name: string; role: 'admin' | 'user' }
-
-const appIdSchema = v.pipe(
-  v.string(),
-  v.regex(/^[a-z0-9]{8}$/, 'app id is not valid'),
-  v.transform((value): AppId => value as AppId),
-)
-
-const appKeySchema = v.pipe(
-  v.string(),
-  v.regex(/^[0-9a-f]{32}$/, 'app key is not valid'),
-  v.transform((value): AppKey => value as AppKey),
-)
-
-const appSecretSchema = v.pipe(
-  v.string(),
-  v.regex(/^[0-9a-f]{32}$/, 'app secret is not valid'),
-  v.transform((value): AppSecret => value as AppSecret),
-)
 
 const appWireFields = {
   id: appIdSchema,

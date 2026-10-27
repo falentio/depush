@@ -24,6 +24,12 @@ function stubFetch(response: Response | Error) {
   return fetchMock
 }
 
+function initOf(fetchMock: ReturnType<typeof stubFetch>): RequestInit {
+  const init = fetchMock.mock.calls[0]?.[1]
+  if (init === undefined) throw new Error('fetch was called without init')
+  return init
+}
+
 afterEach(() => {
   vi.unstubAllGlobals()
 })
@@ -35,7 +41,7 @@ describe('createHttp', () => {
 
     await expect(http.json('GET', '/api/apps', okBody)).resolves.toEqual({ ok: true })
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const init = initOf(fetchMock)
     expect(fetchMock.mock.calls[0]?.[0]).toBe('/api/apps')
     expect(init.method).toBe('GET')
     expect(init.credentials).toBe('same-origin')
@@ -50,7 +56,7 @@ describe('createHttp', () => {
 
     await http.json('POST', '/api/apps', okBody, { body: { name: 'demo' } })
 
-    const init = fetchMock.mock.calls[0]?.[1] as RequestInit
+    const init = initOf(fetchMock)
     expect(init.headers).toEqual({
       accept: 'application/json',
       'content-type': 'application/json',

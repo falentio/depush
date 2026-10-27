@@ -5,9 +5,7 @@ import { THEME_STORAGE_KEY } from '@/lib/theme'
 import indexSource from '../../index.html?raw'
 import wranglerSource from '../../wrangler.jsonc?raw'
 
-const wrangler = JSON.parse(wranglerSource) as {
-  assets: { run_worker_first: string[] }
-}
+const wrangler: { assets: { run_worker_first: string[] } } = JSON.parse(wranglerSource)
 
 describe('client paths', () => {
   it('names only the root and the console namespace', () => {
