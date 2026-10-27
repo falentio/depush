@@ -1,6 +1,7 @@
 import { AlertTriangleIcon, Loader2Icon } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 import type { IssuedApp } from '@/api/contracts'
+import { CopyButton } from '@/components/copy-button'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,7 +14,6 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { CopyButton } from '@/components/copy-button'
 import type { CommandState } from '@/lib/use-command'
 
 export function AppDialog({

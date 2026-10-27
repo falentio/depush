@@ -1,5 +1,5 @@
-import type { ApiError } from '@/api/errors'
 import type { User } from '@/api/contracts'
+import type { ApiError } from '@/api/errors'
 
 export type { User }
 

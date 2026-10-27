@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import indexSource from '../../index.html?raw'
-import wranglerSource from '../../wrangler.jsonc?raw'
 import { assertRouteNamespace, isWorkerPath, paths, WORKER_PREFIXES } from '@/app/paths'
 import { RUN_WORKER_FIRST } from '@/app/worker-routes'
 import { THEME_STORAGE_KEY } from '@/lib/theme'
+import indexSource from '../../index.html?raw'
+import wranglerSource from '../../wrangler.jsonc?raw'
 
 const wrangler = JSON.parse(wranglerSource) as {
   assets: { run_worker_first: string[] }

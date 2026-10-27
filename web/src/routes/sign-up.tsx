@@ -2,9 +2,8 @@ import { getRouteApi, Link } from '@tanstack/react-router'
 import { EyeIcon, EyeOffIcon, Loader2Icon } from 'lucide-react'
 import { type FormEvent, useState } from 'react'
 import { isApiError } from '@/api/errors'
-import { routeIds, paths } from '@/app/paths'
+import { paths, routeIds } from '@/app/paths'
 import { formAuthError } from '@/auth/form-error'
-import { useDocumentTitle } from '@/lib/use-document-title'
 import { Button } from '@/components/ui/button'
 import {
   Card,
@@ -16,6 +15,7 @@ import {
 } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { useDocumentTitle } from '@/lib/use-document-title'
 
 const route = getRouteApi(routeIds.signUp)
 

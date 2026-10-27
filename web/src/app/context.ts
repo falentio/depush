@@ -1,6 +1,6 @@
 import { createApi } from '@/api/client'
 import { createHttp } from '@/api/http'
-import { createAuthStore, type AuthStore } from '@/auth/store'
+import { type AuthStore, createAuthStore } from '@/auth/store'
 
 export type Api = ReturnType<typeof createApi>
 

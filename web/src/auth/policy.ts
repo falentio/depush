@@ -1,4 +1,4 @@
-import { paths, type KnownPath } from '@/app/paths'
+import { type KnownPath, paths } from '@/app/paths'
 import type { AccessState, SettledAuth } from './types'
 
 export type Requirement = 'public' | 'anonymous-only' | 'authenticated' | 'admin'
