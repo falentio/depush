@@ -1,7 +1,9 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "lib": ["ES2022"],
+    "lib": [
+      "ES2022"
+    ],
     "module": "ESNext",
     "moduleResolution": "bundler",
     "strict": true,
@@ -13,7 +15,12 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "noEmit": true,
-    "types": ["./worker-configuration.d.ts", "@cloudflare/vitest-plugin/types", "node"]
+    "types": [
+      "./worker-configuration.d.ts",
+      "@cloudflare/vitest-plugin/types",
+      "node"
+    ],
+    "allowImportingTsExtensions": true
   },
   "include": [
     "src/**/*.ts",
@@ -22,5 +29,8 @@
     "vitest.config.ts",
     "vitest.compat.config.ts",
     "worker-configuration.d.ts"
+  ],
+  "exclude": [
+    "test/client"
   ]
 }
