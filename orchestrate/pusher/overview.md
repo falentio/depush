@@ -4,7 +4,7 @@ Goal: a self-hosted Worker that existing Pusher Channels clients can point at wi
 
 Consumer: a self-hoster running a single app for personal or small-team projects. They configure one app id/key/secret, deploy, and use their existing pusher-js and Pusher server SDK integrations.
 
-Non-goals for v1: frontend or dashboard, accounts, multi-tenancy, teams, sharing, quotas, billing, webhooks, cache channels, Live Activities, Beams, user signin/watchlists, server-side encrypted-channel keys.
+Non-goals for v1: multi-tenancy, teams, sharing, quotas, billing, webhooks, cache channels, Live Activities, Beams, user signin/watchlists, server-side encrypted-channel keys. Accounts arrived with the registry, and the console arrived in v0.3.
 
 Architecture:
 
@@ -53,6 +53,29 @@ All v0.2 units landed. Final verification at `447f10a`: `pnpm check` 32 code fil
 `pnpm test` 123/123, `pnpm build`, `pnpm exec wrangler deploy --dry-run`, and `pnpm compat` 40/40
 with official `pusher-js` 8.6 and `pusher` 5.3. Tag `v0.2.0` marks the landed state. No remote and
 no PRs.
+
+## v0.3 — admin console
+
+The console is a React 19 + TanStack Router + Tailwind v4 client, built by the root Vite project
+and served by the same Worker at `/console`. It installs as a PWA.
+
+- The first account becomes the admin. A later account can sign in but reaches the forbidden page,
+  and it never fetches `/api/apps`.
+- The admin lists, creates, renames, and deletes apps, and toggles sign-ups. A new app's secret is
+  shown once, never returned by the list, and never written to the URL or web storage.
+- Workers Assets serves the console shell. The four Worker prefixes stay in `run_worker_first`.
+  Bare `/apps` is served by the shell, so it returns the SPA instead of a JSON 404.
+
+Units:
+
+| id         | track | state  | outcome                                                                       |
+| ---------- | ----- | ------ | ----------------------------------------------------------------------------- |
+| u8-console | web   | review | React console at `/console`, installable PWA, one-time secret, sign-up switch |
+
+Proof: `pnpm typecheck`, `pnpm test` for the workerd and client suites, `pnpm build`,
+`node scripts/verify-frontend.mjs`, `pnpm exec wrangler deploy --dry-run`, and the browser checks in
+the pull request. Close criteria: every command passes, the secret stays out of the list, URL, and
+storage after acknowledgement, and a non-admin never fetches `/api/apps`.
 
 ## Close (v0.1.0)
 
