@@ -32,6 +32,3 @@ export const deployments = sqliteTable(
     check('deployments_status_check', sql`${table.status} in ${allowedStatuses}`),
   ],
 )
-
-export type AppRow = typeof apps.$inferSelect
-export type DeploymentRow = typeof deployments.$inferSelect

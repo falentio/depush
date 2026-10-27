@@ -1,5 +1,7 @@
+import { sql } from 'drizzle-orm'
 import { Hono } from 'hono'
 import * as v from 'valibot'
+import { createDb } from './db/client'
 import { handleError, handleNotFound } from './http/errors'
 import { appsRoutes } from './routes/apps'
 import { deploymentRoutes } from './routes/deployments'
@@ -15,7 +17,8 @@ app.onError(handleError)
 app.notFound(handleNotFound)
 
 app.get('/health', async (c) => {
-  const row = await c.env.DB.prepare('SELECT 1 AS ok').first()
+  const db = createDb(c.env.DB)
+  const row = await db.get<{ ok: number }>(sql`select 1 as ok`)
   v.parse(healthSchema, row)
   return c.json({ status: 'ok', db: 'up' })
 })
