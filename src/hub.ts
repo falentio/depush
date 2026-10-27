@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import * as v from 'valibot'
 import { verifyChannelAuth } from './auth'
+import type { Channel } from './channel'
 import type { AppConfig } from './config'
 import { readConfig } from './config'
 import type { AppBindings } from './env'
@@ -8,11 +9,13 @@ import type { ChannelSnapshot } from './events'
 import { dataBytes, MAX_DATA_BYTES } from './events'
 import type { ClientFrame, PresenceMember } from './protocol'
 import {
+  cacheMiss,
   channelEvent,
   channelKind,
   clientEventFrame,
   connectionEstablished,
   errorFrame,
+  isCacheChannel,
   isOversizedFrame,
   isWebSocketUpgrade,
   memberAdded,
@@ -45,7 +48,16 @@ export type BroadcastInput = {
   name: string
   data: string
   channels: string[]
+  userId: string | null
+  cache: boolean
   exceptSocketId: string | undefined
+}
+
+type RecordedEvent = {
+  name: string
+  data: string
+  userId: string | null
+  cache: boolean
 }
 
 type SubscribeFrame = Extract<ClientFrame, { kind: 'subscribe' }>
@@ -111,6 +123,15 @@ export class AppHub extends DurableObject<AppBindings> {
   }
 
   async broadcast(input: BroadcastInput): Promise<void> {
+    for (const channel of input.channels) {
+      await this.recordEvent(channel, {
+        name: input.name,
+        data: input.data,
+        userId: input.userId,
+        cache: input.cache,
+      })
+    }
+
     for (const socket of this.ctx.getWebSockets()) {
       const state = readSocketState(socket)
       if (state === null) continue
@@ -159,7 +180,7 @@ export class AppHub extends DurableObject<AppBindings> {
         this.unsubscribe(socket, parsed.frame.channel)
         return
       case 'client':
-        this.clientEvent(socket, parsed.frame)
+        await this.clientEvent(socket, parsed.frame)
         return
     }
   }
@@ -213,6 +234,7 @@ export class AppHub extends DurableObject<AppBindings> {
 
     if (isSubscribed(state, frame.channel)) {
       socket.send(this.subscriptionFrame(frame.channel, presence))
+      await this.deliverCache(socket, frame.channel)
       return
     }
 
@@ -230,6 +252,7 @@ export class AppHub extends DurableObject<AppBindings> {
     })
 
     socket.send(this.subscriptionFrame(frame.channel, presence))
+    await this.deliverCache(socket, frame.channel)
 
     if (presence !== null && !alreadyPresent) {
       this.sendToChannel(frame.channel, memberAdded(frame.channel, presence), state.socketId)
@@ -253,7 +276,7 @@ export class AppHub extends DurableObject<AppBindings> {
     }
   }
 
-  private clientEvent(socket: WebSocket, frame: ClientEventFrame): void {
+  private async clientEvent(socket: WebSocket, frame: ClientEventFrame): Promise<void> {
     const state = readSocketState(socket)
     if (state === null) return
 
@@ -278,6 +301,13 @@ export class AppHub extends DurableObject<AppBindings> {
       socket.send(errorFrame('Client event rate limit exceeded', PUSHER_ERROR_RATE_LIMIT))
       return
     }
+
+    await this.recordEvent(frame.channel, {
+      name: frame.name,
+      data: typeof frame.data === 'string' ? frame.data : JSON.stringify(frame.data ?? null),
+      userId: kind === 'presence' ? (subscription.presence?.userId ?? null) : null,
+      cache: false,
+    })
 
     this.sendToChannel(
       frame.channel,
@@ -326,6 +356,31 @@ export class AppHub extends DurableObject<AppBindings> {
         socket.send(frame)
       } catch {}
     }
+  }
+
+  private channelState(channel: string): DurableObjectStub<Channel> {
+    return this.env.CHANNEL.get(this.env.CHANNEL.idFromName(`${this.config.appId}:${channel}`))
+  }
+
+  private async recordEvent(channel: string, input: RecordedEvent): Promise<void> {
+    if (!input.cache || !isCacheChannel(channel)) return
+
+    await this.channelState(channel).record({
+      name: input.name,
+      data: input.data,
+      userId: input.userId,
+      cache: input.cache,
+      ttlSeconds: this.config.cacheTtlSeconds,
+    })
+  }
+
+  private async deliverCache(socket: WebSocket, channel: string): Promise<void> {
+    if (!isCacheChannel(channel)) return
+
+    const cached = await this.channelState(channel).snapshot()
+    socket.send(
+      cached === null ? cacheMiss(channel) : channelEvent(cached.name, channel, cached.data),
+    )
   }
 
   private fail(socket: WebSocket, message: string, code: number): void {

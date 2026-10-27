@@ -5,7 +5,13 @@
   "compatibility_date": "2026-10-26",
   "observability": { "enabled": true },
   "durable_objects": {
-    "bindings": [{ "name": "APP_HUB", "class_name": "AppHub" }]
+    "bindings": [
+      { "name": "APP_HUB", "class_name": "AppHub" },
+      { "name": "CHANNEL", "class_name": "Channel" }
+    ]
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AppHub"] }]
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["AppHub"] },
+    { "tag": "v2", "new_sqlite_classes": ["Channel"] }
+  ]
 }

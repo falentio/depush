@@ -13,8 +13,9 @@ import {
   parseChannelInfo,
   parseTrigger,
 } from './events'
-import { isValidChannelName, isWebSocketUpgrade, upgradeRejected } from './protocol'
+import { isCacheChannel, isValidChannelName, isWebSocketUpgrade, upgradeRejected } from './protocol'
 
+export { Channel } from './channel'
 export { AppHub } from './hub'
 
 const PROTOCOL_VERSION = '7'
@@ -61,6 +62,8 @@ app.post('/apps/:appId/events', async (c) => {
     name: parsed.trigger.name,
     data: parsed.trigger.data,
     channels: parsed.trigger.channels,
+    userId: null,
+    cache: true,
     exceptSocketId: parsed.trigger.socketId,
   })
 
@@ -82,6 +85,8 @@ app.post('/apps/:appId/batch_events', async (c) => {
       name: event.name,
       data: event.data,
       channels: [event.channel],
+      userId: null,
+      cache: true,
       exceptSocketId: event.socketId,
     })
   }
@@ -136,11 +141,18 @@ app.get('/apps/:appId/channels/:channelName', async (c) => {
   const info = parseChannelInfo(c.req.query('info'))
   if (!info.ok) return c.json({ error: info.error }, 400)
 
+  if (info.info.cache && !isCacheChannel(channelName)) {
+    return c.json({ error: 'cache is only available on cache channels' }, 400)
+  }
+
   const snapshot = await appHub(c, signed.config).channelSnapshot()
   const result = channelInfo(snapshot, channelName, info.info)
   if (!result.ok) return c.json({ error: result.error }, 400)
 
-  return c.json(result.body)
+  if (!info.info.cache) return c.json(result.body)
+
+  const cache = await channelState(c, signed.config, channelName).cacheInfo()
+  return c.json({ ...result.body, cache })
 })
 
 app.notFound((c) => {
@@ -152,6 +164,10 @@ app.notFound((c) => {
 
 function appHub(c: AppContext, config: AppConfig) {
   return c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
+}
+
+function channelState(c: AppContext, config: AppConfig, channel: string) {
+  return c.env.CHANNEL.get(c.env.CHANNEL.idFromName(`${config.appId}:${channel}`))
 }
 
 async function signedRequest(c: AppContext): Promise<SignedRequest> {

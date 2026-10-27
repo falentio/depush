@@ -10,9 +10,10 @@ const snapshot: ChannelSnapshot = {
   'public-smoke': { subscriptionCount: 1, userIds: [] },
 }
 
-const noInfo = { userCount: false, subscriptionCount: false }
-const userCount = { userCount: true, subscriptionCount: false }
-const subscriptionCount = { userCount: false, subscriptionCount: true }
+const noInfo = { userCount: false, subscriptionCount: false, cache: false }
+const userCount = { userCount: true, subscriptionCount: false, cache: false }
+const subscriptionCount = { userCount: false, subscriptionCount: true, cache: false }
+const cacheInfo = { userCount: false, subscriptionCount: false, cache: true }
 
 describe('parseChannelInfo', () => {
   it('treats a missing or empty info as no attributes', () => {
@@ -22,16 +23,17 @@ describe('parseChannelInfo', () => {
 
   it('parses each supported attribute', () => {
     expect(parseChannelInfo('user_count')).toEqual({ ok: true, info: userCount })
+    expect(parseChannelInfo('cache')).toEqual({ ok: true, info: cacheInfo })
     expect(parseChannelInfo('subscription_count,user_count')).toEqual({
       ok: true,
-      info: { userCount: true, subscriptionCount: true },
+      info: { userCount: true, subscriptionCount: true, cache: false },
     })
   })
 
-  it('rejects cache and unknown attributes', () => {
-    expect(parseChannelInfo('cache')).toEqual({
+  it('rejects unknown attributes', () => {
+    expect(parseChannelInfo('nope')).toEqual({
       ok: false,
-      error: 'Unsupported info attribute: cache',
+      error: 'Unsupported info attribute: nope',
     })
     expect(parseChannelInfo('user_count,nope')).toEqual({
       ok: false,
@@ -68,6 +70,14 @@ describe('channelList', () => {
 
   it('rejects subscription_count for a presence channel', () => {
     expect(channelList(snapshot, 'presence-', subscriptionCount)).toMatchObject({ ok: false })
+  })
+
+  it('rejects cache on the list endpoint', () => {
+    expect(channelList(snapshot, undefined, cacheInfo)).toEqual({
+      ok: false,
+      error: 'cache is only available on a single channel',
+    })
+    expect(channelList(snapshot, 'cache-', cacheInfo)).toMatchObject({ ok: false })
   })
 })
 
@@ -107,6 +117,17 @@ describe('channelInfo', () => {
   it('rejects info that does not apply to the channel kind', () => {
     expect(channelInfo(snapshot, 'public-smoke', userCount)).toMatchObject({ ok: false })
     expect(channelInfo(snapshot, 'presence-room', subscriptionCount)).toMatchObject({ ok: false })
+  })
+
+  it('ignores the cache flag and leaves the payload to the route', () => {
+    expect(channelInfo(snapshot, 'public-smoke', cacheInfo)).toEqual({
+      ok: true,
+      body: { occupied: true },
+    })
+    expect(channelInfo(snapshot, 'cache-unknown', cacheInfo)).toEqual({
+      ok: true,
+      body: { occupied: false },
+    })
   })
 })
 

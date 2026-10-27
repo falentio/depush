@@ -14,6 +14,7 @@ const config: AppConfig = {
   key: APP_KEY,
   secret: APP_SECRET,
   activityTimeout: 120,
+  cacheTtlSeconds: 1800,
 }
 
 async function signedRequest(

@@ -31,6 +31,7 @@ export type BatchResult = { ok: true; events: BatchEvent[] } | ParseFailure
 export type ChannelInfoRequest = {
   userCount: boolean
   subscriptionCount: boolean
+  cache: boolean
 }
 
 export type ChannelInfoParse = { ok: true; info: ChannelInfoRequest } | { ok: false; error: string }
@@ -88,9 +89,10 @@ const batchSchema = v.object({
   batch: v.pipe(v.array(batchEventSchema), v.minLength(1), v.maxLength(MAX_BATCH_EVENTS)),
 })
 
-const INFO_ATTRIBUTES = new Map<string, 'userCount' | 'subscriptionCount'>([
+const INFO_ATTRIBUTES = new Map<string, 'userCount' | 'subscriptionCount' | 'cache'>([
   ['user_count', 'userCount'],
   ['subscription_count', 'subscriptionCount'],
+  ['cache', 'cache'],
 ])
 
 export function parseTrigger(body: Uint8Array, infoQuery: string | undefined): TriggerResult {
@@ -176,7 +178,7 @@ export function dataBytes(data: unknown): number {
 }
 
 export function parseChannelInfo(raw: string | undefined): ChannelInfoParse {
-  const info: ChannelInfoRequest = { userCount: false, subscriptionCount: false }
+  const info: ChannelInfoRequest = { userCount: false, subscriptionCount: false, cache: false }
 
   for (const name of (raw ?? '').split(',')) {
     if (name === '') continue
@@ -195,6 +197,10 @@ export function channelList(
   prefix: string | undefined,
   info: ChannelInfoRequest,
 ): ChannelListResult {
+  if (info.cache) {
+    return { ok: false, error: 'cache is only available on a single channel' }
+  }
+
   if (info.userCount && (prefix === undefined || !prefix.startsWith('presence-'))) {
     return {
       ok: false,

@@ -183,6 +183,12 @@ export function channelKind(channel: string): ChannelKind {
   return 'public'
 }
 
+const CACHE_CHANNEL_PREFIXES = ['private-cache-', 'presence-cache-', 'cache-']
+
+export function isCacheChannel(channel: string): boolean {
+  return CACHE_CHANNEL_PREFIXES.some((prefix) => channel.startsWith(prefix))
+}
+
 export function channelEvent(name: string, channel: string, data: string): string {
   return JSON.stringify({ event: name, channel, data })
 }
@@ -199,6 +205,10 @@ export function clientEventFrame(input: ClientEventBroadcast): string {
 
 export function errorFrame(message: string, code: number): string {
   return JSON.stringify({ event: 'pusher:error', data: { message, code } })
+}
+
+export function cacheMiss(channel: string): string {
+  return JSON.stringify({ event: 'pusher:cache_miss', channel, data: '{}' })
 }
 
 export function isWebSocketUpgrade(request: Request): boolean {

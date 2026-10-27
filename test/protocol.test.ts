@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import type { PresenceMember } from '../src/protocol'
 import {
+  cacheMiss,
+  channelEvent,
   channelKind,
+  isCacheChannel,
   isOversizedFrame,
   isValidChannelName,
   MAX_CHANNEL_NAME,
@@ -111,6 +114,51 @@ describe('channelKind', () => {
     expect(channelKind('private-room')).toBe('private')
     expect(channelKind('presence-room')).toBe('presence')
     expect(channelKind('private-encrypted-room')).toBe('encrypted')
+  })
+
+  it('keeps the kind of each cache prefix', () => {
+    expect(channelKind('cache-room')).toBe('public')
+    expect(channelKind('private-cache-room')).toBe('private')
+    expect(channelKind('presence-cache-room')).toBe('presence')
+    expect(channelKind('private-encrypted-cache-room')).toBe('encrypted')
+  })
+})
+
+describe('cache channels', () => {
+  it('accepts the three cache prefixes', () => {
+    expect(isCacheChannel('cache-room')).toBe(true)
+    expect(isCacheChannel('private-cache-room')).toBe(true)
+    expect(isCacheChannel('presence-cache-room')).toBe(true)
+  })
+
+  it('rejects bare prefixes, other channels, and encrypted channels', () => {
+    for (const name of [
+      'cache',
+      'private-cache',
+      'presence-cache',
+      'private-encrypted-cache-room',
+      'private-room',
+      'presence-room',
+      'news',
+    ]) {
+      expect(isCacheChannel(name)).toBe(false)
+    }
+  })
+
+  it('builds a cache miss frame', () => {
+    expect(JSON.parse(cacheMiss('cache-room'))).toEqual({
+      event: 'pusher:cache_miss',
+      channel: 'cache-room',
+      data: '{}',
+    })
+  })
+
+  it('replays a cached event as a normal channel event', () => {
+    expect(JSON.parse(channelEvent('greeting', 'cache-room', '{"hello":"world"}'))).toEqual({
+      event: 'greeting',
+      channel: 'cache-room',
+      data: '{"hello":"world"}',
+    })
   })
 })
 
