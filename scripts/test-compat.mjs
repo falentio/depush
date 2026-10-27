@@ -2,23 +2,13 @@ import { spawn } from 'node:child_process'
 import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
+import { bootstrap, DEV_VARS_CONTENT } from './bootstrap.mjs'
 
 const HOST = '127.0.0.1'
 const DEFAULT_PORT = 8792
-const APP_ID = '1'
-const APP_KEY = 'test-key'
-const APP_SECRET = 'test-secret'
 const CLOUD_KEYS = ['PUSHER_CLOUD_APP_ID', 'PUSHER_CLOUD_APP_KEY', 'PUSHER_CLOUD_APP_SECRET']
 const DEV_VARS = '.dev.vars'
 const DEV_VARS_BACKUP = '.dev.vars.test-compat-backup'
-const DEV_VARS_CONTENT = [
-  `PUSHER_APP_ID=${APP_ID}`,
-  `PUSHER_APP_KEY=${APP_KEY}`,
-  `PUSHER_APP_SECRET=${APP_SECRET}`,
-  'PUSHER_ACTIVITY_TIMEOUT=120',
-  'PUSHER_CACHE_TTL_SECONDS=1800',
-  '',
-].join('\n')
 const HEALTH_TIMEOUT_MS = 30_000
 const STOP_TIMEOUT_MS = 5_000
 
@@ -82,7 +72,7 @@ function backupDevVars() {
   }
   if (existsSync(DEV_VARS)) renameSync(DEV_VARS, DEV_VARS_BACKUP)
   devVarsManaged = true
-  writeFileSync(DEV_VARS, DEV_VARS_CONTENT)
+  writeFileSync(DEV_VARS, DEV_VARS_CONTENT())
 }
 
 function restoreDevVars() {
@@ -179,16 +169,16 @@ async function waitForHealthz(baseUrl, child) {
   throw new Error(`local dev server did not answer /healthz within 30s`)
 }
 
-function runVitest(baseUrl, cloud) {
+function runVitest(baseUrl, cloud, app) {
   return spawn('pnpm', ['exec', 'vitest', 'run', '--config', 'vitest.compat.config.ts'], {
     detached: true,
     env: {
       ...withoutLocalAppEnv(process.env),
       ...cloud,
       DEPUSH_BASE_URL: baseUrl,
-      DEPUSH_APP_ID: APP_ID,
-      DEPUSH_APP_KEY: APP_KEY,
-      DEPUSH_APP_SECRET: APP_SECRET,
+      DEPUSH_APP_ID: app.appId,
+      DEPUSH_APP_KEY: app.key,
+      DEPUSH_APP_SECRET: app.secret,
     },
     stdio: 'inherit',
   })
@@ -220,7 +210,10 @@ async function main() {
   console.log(`local dev server ready at ${baseUrl}`)
   console.log(`cloud comparison ${compareWithCloud ? 'enabled' : 'disabled'}`)
 
-  vitest = runVitest(baseUrl, cloud)
+  const app = await bootstrap(baseUrl, 'test-compat')
+  console.log(`bootstrap app ${app.appId} created`)
+
+  vitest = runVitest(baseUrl, cloud, app)
   return exitCode(vitest)
 }
 

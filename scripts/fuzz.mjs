@@ -4,22 +4,16 @@ import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import Pusher from 'pusher'
+import { bootstrap, DEV_VARS_CONTENT } from './bootstrap.mjs'
 
 const HOST = '127.0.0.1'
 const DEFAULT_PORT = 8793
-const APP_ID = '1'
-const APP_KEY = 'test-key'
-const APP_SECRET = 'test-secret'
 const DEV_VARS = '.dev.vars'
 const DEV_VARS_BACKUP = '.dev.vars.fuzz-backup'
-const DEV_VARS_CONTENT = [
-  `PUSHER_APP_ID=${APP_ID}`,
-  `PUSHER_APP_KEY=${APP_KEY}`,
-  `PUSHER_APP_SECRET=${APP_SECRET}`,
-  'PUSHER_ACTIVITY_TIMEOUT=120',
-  'PUSHER_CACHE_TTL_SECONDS=1800',
-  '',
-].join('\n')
+
+let APP_ID = ''
+let APP_KEY = ''
+let APP_SECRET = ''
 const DEFAULT_ITERATIONS = 200
 const HTTP_TIMEOUT_MS = 5_000
 const WS_TIMEOUT_MS = 3_000
@@ -266,7 +260,7 @@ function backupDevVars() {
   }
   if (existsSync(DEV_VARS)) renameSync(DEV_VARS, DEV_VARS_BACKUP)
   devVarsManaged = true
-  writeFileSync(DEV_VARS, DEV_VARS_CONTENT)
+  writeFileSync(DEV_VARS, DEV_VARS_CONTENT())
 }
 
 function restoreDevVars() {
@@ -2035,6 +2029,11 @@ async function run() {
     server = startServer(port)
     await waitForHealthz(baseUrl)
     console.log(`local dev server ready at ${baseUrl}`)
+    const app = await bootstrap(baseUrl, 'fuzz')
+    APP_ID = app.appId
+    APP_KEY = app.key
+    APP_SECRET = app.secret
+    console.log(`bootstrap app ${APP_ID} created`)
     const finding = await fuzzCases(reporter, seed, iterations, baseUrl, wsBase, port)
     if (finding === STOPPED) return 0
     if (finding !== null) {

@@ -12,10 +12,6 @@ export type NewAppRecord = AppRecord & { secret: string }
 
 export type Settings = { signup_enabled: boolean }
 
-export function isAdmin(role: string | null): boolean {
-  return role === 'admin'
-}
-
 export type SignUpDecision = { allowed: true; admin: boolean } | { allowed: false }
 
 type Row = Record<string, unknown>
@@ -232,11 +228,6 @@ export class Registry extends DurableObject<Env> {
   signUpDecision(): SignUpDecision {
     if (this.userCount() === 0) return { allowed: true, admin: true }
     return this.settings().signup_enabled ? { allowed: true, admin: false } : { allowed: false }
-  }
-
-  userRole(userId: string): string | null {
-    const row = this.sql.exec('SELECT role FROM user WHERE id = ?', userId).toArray()[0]
-    return row === undefined ? null : String(row.role ?? '')
   }
 
   settings(): Settings {
