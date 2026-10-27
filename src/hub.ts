@@ -1,26 +1,36 @@
 import { DurableObject } from 'cloudflare:workers'
 import * as v from 'valibot'
+import { verifyChannelAuth } from './auth'
 import type { AppConfig } from './config'
 import { readConfig } from './config'
 import type { AppBindings } from './env'
+import type { ClientFrame, PresenceMember } from './protocol'
 import {
   channelEvent,
+  channelKind,
   connectionEstablished,
   errorFrame,
   isWebSocketUpgrade,
+  memberAdded,
+  memberRemoved,
   newSocketId,
   parseFrame,
   pong,
+  presenceSubscriptionSucceeded,
   subscriptionSucceeded,
 } from './protocol'
 
-const AUTH_CHANNEL_PREFIXES = ['private-', 'presence-', 'private-encrypted-']
 const PUSHER_ERROR_BAD_MESSAGE = 4300
 const PUSHER_ERROR_AUTH_REQUIRED = 4009
 
-type SocketState = {
+export type Subscription = {
+  channel: string
+  presence?: PresenceMember | undefined
+}
+
+export type SocketState = {
   socketId: string
-  channels: string[]
+  subscriptions: Subscription[]
 }
 
 export type BroadcastInput = {
@@ -30,9 +40,21 @@ export type BroadcastInput = {
   exceptSocketId: string | undefined
 }
 
+type SubscribeFrame = Extract<ClientFrame, { kind: 'subscribe' }>
+
+const presenceMemberSchema = v.object({
+  userId: v.string(),
+  userInfo: v.record(v.string(), v.unknown()),
+})
+
+const subscriptionSchema = v.object({
+  channel: v.string(),
+  presence: v.optional(presenceMemberSchema),
+})
+
 const socketStateSchema = v.object({
   socketId: v.string(),
-  channels: v.array(v.string()),
+  subscriptions: v.array(subscriptionSchema),
 })
 
 export class AppHub extends DurableObject<AppBindings> {
@@ -52,7 +74,7 @@ export class AppHub extends DurableObject<AppBindings> {
     const server = pair[1]
     this.ctx.acceptWebSocket(server)
 
-    const state: SocketState = { socketId: newSocketId(), channels: [] }
+    const state: SocketState = { socketId: newSocketId(), subscriptions: [] }
     server.serializeAttachment(state)
     server.send(connectionEstablished(state.socketId, this.config.activityTimeout))
 
@@ -66,7 +88,7 @@ export class AppHub extends DurableObject<AppBindings> {
       if (state.socketId === input.exceptSocketId) continue
 
       for (const channel of input.channels) {
-        if (!state.channels.includes(channel)) continue
+        if (!isSubscribed(state, channel)) continue
         try {
           socket.send(channelEvent(input.name, channel, input.data))
         } catch {}
@@ -74,7 +96,7 @@ export class AppHub extends DurableObject<AppBindings> {
     }
   }
 
-  override webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): void {
+  override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
     if (typeof message !== 'string') {
       socket.send(errorFrame('Binary frames are not supported', PUSHER_ERROR_BAD_MESSAGE))
       return
@@ -93,7 +115,7 @@ export class AppHub extends DurableObject<AppBindings> {
       case 'pong':
         return
       case 'subscribe':
-        this.subscribe(socket, parsed.frame.channel)
+        await this.subscribe(socket, parsed.frame)
         return
       case 'unsubscribe':
         this.unsubscribe(socket, parsed.frame.channel)
@@ -103,38 +125,153 @@ export class AppHub extends DurableObject<AppBindings> {
 
   override webSocketClose(socket: WebSocket, code: number, reason: string): void {
     socket.close(code, reason)
+
+    const state = readSocketState(socket)
+    if (state === null) return
+
+    for (const subscription of state.subscriptions) {
+      if (subscription.presence === undefined) continue
+      this.leavePresence(subscription.channel, subscription.presence.userId, state.socketId)
+    }
   }
 
   override webSocketError(socket: WebSocket): void {
     socket.close(1011, 'WebSocket error')
   }
 
-  private subscribe(socket: WebSocket, channel: string): void {
-    if (requiresAuthorization(channel)) {
-      socket.send(errorFrame('Channel requires authorization', PUSHER_ERROR_AUTH_REQUIRED))
+  private async subscribe(socket: WebSocket, frame: SubscribeFrame): Promise<void> {
+    const current = readSocketState(socket)
+    if (current === null) return
+
+    const kind = channelKind(frame.channel)
+    if (kind === 'encrypted') {
+      this.fail(socket, 'Encrypted channels are not supported', PUSHER_ERROR_AUTH_REQUIRED)
       return
+    }
+
+    let presence: PresenceMember | null = null
+    if (kind !== 'public') {
+      const auth = await verifyChannelAuth(
+        {
+          channel: frame.channel,
+          socketId: current.socketId,
+          auth: frame.auth,
+          channelData: frame.channelData,
+        },
+        this.config,
+      )
+      if (!auth.ok) {
+        this.fail(socket, 'Invalid channel authorization', PUSHER_ERROR_AUTH_REQUIRED)
+        return
+      }
+      presence = auth.presence
     }
 
     const state = readSocketState(socket)
     if (state === null) return
 
-    if (!state.channels.includes(channel)) {
-      socket.serializeAttachment({ ...state, channels: [...state.channels, channel] })
+    if (isSubscribed(state, frame.channel)) {
+      socket.send(this.subscriptionFrame(frame.channel, presence))
+      return
     }
-    socket.send(subscriptionSucceeded(channel))
+
+    const alreadyPresent =
+      presence !== null &&
+      collectPresenceMembers(this.socketStates(), frame.channel, state.socketId).some(
+        (member) => member.userId === presence.userId,
+      )
+
+    const subscription: Subscription =
+      presence === null ? { channel: frame.channel } : { channel: frame.channel, presence }
+    socket.serializeAttachment({
+      ...state,
+      subscriptions: [...state.subscriptions, subscription],
+    })
+
+    socket.send(this.subscriptionFrame(frame.channel, presence))
+
+    if (presence !== null && !alreadyPresent) {
+      this.sendToChannel(frame.channel, memberAdded(frame.channel, presence), state.socketId)
+    }
   }
 
   private unsubscribe(socket: WebSocket, channel: string): void {
     const state = readSocketState(socket)
     if (state === null) return
 
-    if (state.channels.includes(channel)) {
-      socket.serializeAttachment({
-        ...state,
-        channels: state.channels.filter((subscribed) => subscribed !== channel),
-      })
+    const subscription = state.subscriptions.find((entry) => entry.channel === channel)
+    if (subscription === undefined) return
+
+    socket.serializeAttachment({
+      ...state,
+      subscriptions: state.subscriptions.filter((entry) => entry.channel !== channel),
+    })
+
+    if (subscription.presence !== undefined) {
+      this.leavePresence(channel, subscription.presence.userId, state.socketId)
     }
   }
+
+  private leavePresence(channel: string, userId: string, socketId: string): void {
+    const remaining = collectPresenceMembers(this.socketStates(), channel, socketId)
+    if (remaining.some((member) => member.userId === userId)) return
+
+    this.sendToChannel(channel, memberRemoved(channel, userId), socketId)
+  }
+
+  private subscriptionFrame(channel: string, presence: PresenceMember | null): string {
+    if (presence === null) return subscriptionSucceeded(channel)
+
+    return presenceSubscriptionSucceeded(
+      channel,
+      collectPresenceMembers(this.socketStates(), channel, undefined),
+    )
+  }
+
+  private socketStates(): SocketState[] {
+    const states: SocketState[] = []
+    for (const socket of this.ctx.getWebSockets()) {
+      const state = readSocketState(socket)
+      if (state !== null) states.push(state)
+    }
+    return states
+  }
+
+  private sendToChannel(channel: string, frame: string, exceptSocketId: string | undefined): void {
+    for (const socket of this.ctx.getWebSockets()) {
+      const state = readSocketState(socket)
+      if (state === null) continue
+      if (state.socketId === exceptSocketId) continue
+      if (!isSubscribed(state, channel)) continue
+      try {
+        socket.send(frame)
+      } catch {}
+    }
+  }
+
+  private fail(socket: WebSocket, message: string, code: number): void {
+    socket.send(errorFrame(message, code))
+    socket.close(code, message)
+  }
+}
+
+export function collectPresenceMembers(
+  states: SocketState[],
+  channel: string,
+  exceptSocketId: string | undefined,
+): PresenceMember[] {
+  const members = new Map<string, PresenceMember>()
+  for (const state of states) {
+    if (state.socketId === exceptSocketId) continue
+
+    for (const subscription of state.subscriptions) {
+      if (subscription.channel !== channel || subscription.presence === undefined) continue
+      if (!members.has(subscription.presence.userId)) {
+        members.set(subscription.presence.userId, subscription.presence)
+      }
+    }
+  }
+  return [...members.values()]
 }
 
 function readSocketState(socket: WebSocket): SocketState | null {
@@ -142,6 +279,6 @@ function readSocketState(socket: WebSocket): SocketState | null {
   return parsed.success ? parsed.output : null
 }
 
-function requiresAuthorization(channel: string): boolean {
-  return AUTH_CHANNEL_PREFIXES.some((prefix) => channel.startsWith(prefix))
+function isSubscribed(state: SocketState, channel: string): boolean {
+  return state.subscriptions.some((subscription) => subscription.channel === channel)
 }

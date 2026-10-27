@@ -3,8 +3,20 @@ import * as v from 'valibot'
 export type ClientFrame =
   | { kind: 'ping' }
   | { kind: 'pong' }
-  | { kind: 'subscribe'; channel: string }
+  | {
+      kind: 'subscribe'
+      channel: string
+      auth?: string | undefined
+      channelData?: string | undefined
+    }
   | { kind: 'unsubscribe'; channel: string }
+
+export type ChannelKind = 'public' | 'private' | 'presence' | 'encrypted'
+
+export type PresenceMember = {
+  userId: string
+  userInfo: Record<string, unknown>
+}
 
 export type FrameParse = { ok: true; frame: ClientFrame } | { ok: false }
 
@@ -15,7 +27,11 @@ const frameSchema = v.variant('event', [
   v.object({ event: v.literal('pusher:pong') }),
   v.object({
     event: v.literal('pusher:subscribe'),
-    data: v.object({ channel: channelName }),
+    data: v.object({
+      channel: channelName,
+      auth: v.optional(v.string()),
+      channel_data: v.optional(v.string()),
+    }),
   }),
   v.object({
     event: v.literal('pusher:unsubscribe'),
@@ -41,7 +57,15 @@ export function parseFrame(raw: string): FrameParse {
     case 'pusher:pong':
       return { ok: true, frame: { kind: 'pong' } }
     case 'pusher:subscribe':
-      return { ok: true, frame: { kind: 'subscribe', channel: frame.data.channel } }
+      return {
+        ok: true,
+        frame: {
+          kind: 'subscribe',
+          channel: frame.data.channel,
+          auth: frame.data.auth,
+          channelData: frame.data.channel_data,
+        },
+      }
     case 'pusher:unsubscribe':
       return { ok: true, frame: { kind: 'unsubscribe', channel: frame.data.channel } }
   }
@@ -70,6 +94,40 @@ export function subscriptionSucceeded(channel: string): string {
     channel,
     data: '{}',
   })
+}
+
+export function presenceSubscriptionSucceeded(channel: string, members: PresenceMember[]): string {
+  const hash = Object.fromEntries(members.map((member) => [member.userId, member.userInfo]))
+  return JSON.stringify({
+    event: 'pusher_internal:subscription_succeeded',
+    channel,
+    data: JSON.stringify({
+      presence: { ids: members.map((member) => member.userId), hash, count: members.length },
+    }),
+  })
+}
+
+export function memberAdded(channel: string, member: PresenceMember): string {
+  return JSON.stringify({
+    event: 'pusher_internal:member_added',
+    channel,
+    data: JSON.stringify({ user_id: member.userId, user_info: member.userInfo }),
+  })
+}
+
+export function memberRemoved(channel: string, userId: string): string {
+  return JSON.stringify({
+    event: 'pusher_internal:member_removed',
+    channel,
+    data: JSON.stringify({ user_id: userId }),
+  })
+}
+
+export function channelKind(channel: string): ChannelKind {
+  if (channel.startsWith('private-encrypted-')) return 'encrypted'
+  if (channel.startsWith('private-')) return 'private'
+  if (channel.startsWith('presence-')) return 'presence'
+  return 'public'
 }
 
 export function channelEvent(name: string, channel: string, data: string): string {
