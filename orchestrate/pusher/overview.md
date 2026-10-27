@@ -18,12 +18,16 @@ Proof: official `pusher-js` client and official `pusher` Node SDK run unmodified
 
 Units:
 
-| id                  | track  | state   | outcome                                                                                                                    |
-| ------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------------------------------- |
-| u1-core             | server | landed  | v7 handshake, public channels, ping/pong, signed publish, socket_id exclusion, official SDK harness; depush domain removed |
-| u2-private-presence | server | landed  | private and presence auth, presence membership and member events; encrypted channels stay rejected                         |
-| u3-client-rest      | server | landed  | client events and rate limit, batch events, channel and user queries; terminate deferred with user signin                  |
-| u4-selfhost         | docs   | landed  | README, env example, deploy steps, client configuration, compat script docs                                                |
-| u5-harden           | server | planned | error codes/close codes, limits, hibernation and eviction, raw protocol tests                                              |
+| id                  | track  | state  | outcome                                                                                                                    |
+| ------------------- | ------ | ------ | -------------------------------------------------------------------------------------------------------------------------- |
+| u1-core             | server | landed | v7 handshake, public channels, ping/pong, signed publish, socket_id exclusion, official SDK harness; depush domain removed |
+| u2-private-presence | server | landed | private and presence auth, presence membership and member events; encrypted channels stay rejected                         |
+| u3-client-rest      | server | landed | client events and rate limit, batch events, channel and user queries; terminate deferred with user signin                  |
+| u4-selfhost         | docs   | landed | README, env example, deploy steps, client configuration, compat script docs                                                |
+| u5-harden           | server | landed | error codes/close codes, limits, hibernation and eviction, raw protocol tests                                              |
 
 No remote, no PRs. Landing is a coordinator fast-forward of `unit/<id>` into local `main`; the ledger keys by commit SHA.
+
+## Close
+
+All five units landed on local `main`. Final verification at `d9a3dbe`: `pnpm check` 37 files, `pnpm typecheck`, `pnpm test` 93/93, `pnpm build`, `pnpm exec wrangler deploy --dry-run`, and `pnpm compat` 28/28 with official `pusher-js` 8.6 and `pusher` 5.3. Tag `v0.1.0` marks the landed state. No remote and no PRs.
