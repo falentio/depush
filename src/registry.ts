@@ -89,16 +89,16 @@ const APP_ID_LENGTH = 8
 const APP_ID_ATTEMPTS = 5
 const HEX_BYTES = 16
 
-export function isTable(name: string): name is Table {
+function isTable(name: string): name is Table {
   return TABLES.some((table) => table === name)
 }
 
-export function randomId(length: number, alphabet: string): string {
+function randomId(length: number, alphabet: string): string {
   const bytes = crypto.getRandomValues(new Uint8Array(length))
   return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('')
 }
 
-export function randomHex(byteLength: number): string {
+function randomHex(byteLength: number): string {
   return Array.from(crypto.getRandomValues(new Uint8Array(byteLength)), (byte) =>
     byte.toString(16).padStart(2, '0'),
   ).join('')
@@ -115,10 +115,10 @@ function toColumnValue(value: Where['value']): ColumnValue | ColumnValue[] {
 }
 
 function toColumn(data: Row): { columns: string[]; values: ColumnValue[] } {
-  const columns = Object.keys(data)
+  const entries = Object.entries(data).filter(([, value]) => value !== undefined)
   return {
-    columns,
-    values: columns.map((column) => toColumnValue(data[column] as Where['value']) as ColumnValue),
+    columns: entries.map(([column]) => column),
+    values: entries.map(([, value]) => toColumnValue(value as Where['value']) as ColumnValue),
   }
 }
 
@@ -137,61 +137,91 @@ type Clause = { sql: string; values: ColumnValue[] }
 
 /**
  * better-auth hands the adapter the fields that survive a `WHERE`, so the
- * clause is built from that list instead of from user input.
+ * clause is built from that list instead of from user input. Each clause's own
+ * connector joins it to the clauses before it, the way better-auth's in-memory
+ * adapter folds them.
  */
 function whereClause(where: CleanedWhere[]): Clause {
-  const parts: string[] = []
   const values: ColumnValue[] = []
+  let sql = ''
+  let disjunction = false
 
   for (const clause of where) {
-    const column = `"${clause.field}"`
-    const operator = clause.operator
-
-    if (operator === 'eq' || operator === 'ne') {
-      const negated = operator === 'ne'
-      if (clause.value === null) {
-        parts.push(`${column} IS ${negated ? 'NOT ' : ''}NULL`)
-        continue
-      }
-      parts.push(`${column} ${negated ? '!=' : '='} ?`)
-      values.push(toColumnValue(clause.value) as ColumnValue)
+    const part = clauseSql(clause)
+    values.push(...part.values)
+    if (sql === '') {
+      sql = part.sql
       continue
     }
-
-    if (operator === 'in' || operator === 'not_in') {
-      const list = Array.isArray(clause.value) ? clause.value : [clause.value]
-      if (list.length === 0) {
-        parts.push(operator === 'in' ? '0 = 1' : '1 = 1')
-        continue
-      }
-      const negation = operator === 'not_in' ? 'NOT IN' : 'IN'
-      parts.push(`${column} ${negation} (${placeholders(list.length)})`)
-      values.push(...list.map((value) => toColumnValue(value) as ColumnValue))
+    if (clause.connector === 'OR') {
+      sql = `${sql} OR ${part.sql}`
+      disjunction = true
       continue
     }
-
-    if (operator === 'lt' || operator === 'lte' || operator === 'gt' || operator === 'gte') {
-      parts.push(`${column} ${COMPARISONS[operator]} ?`)
-      values.push(toColumnValue(clause.value) as ColumnValue)
-      continue
-    }
-
-    if (operator === 'contains' || operator === 'starts_with' || operator === 'ends_with') {
-      parts.push(`${column} LIKE ?`)
-      values.push(likeValue(operator, toColumnValue(clause.value) as ColumnValue))
-      continue
-    }
-
-    throw new Error(`Registry adapter cannot translate "${operator}" on ${clause.field}`)
+    sql = disjunction ? `(${sql}) AND ${part.sql}` : `${sql} AND ${part.sql}`
+    disjunction = false
   }
 
-  const sql = parts
-    .map((part, index) =>
-      index === 0 ? part : `${where[index - 1]?.connector === 'OR' ? 'OR' : 'AND'} ${part}`,
-    )
-    .join(' ')
-
   return { sql, values }
+}
+
+function clauseSql(clause: CleanedWhere): Clause {
+  const column = `"${clause.field}"`
+  const operator = clause.operator ?? 'eq'
+
+  switch (operator) {
+    case 'eq':
+    case 'ne': {
+      const negated = operator === 'ne'
+      if (clause.value === null) {
+        return { sql: `${column} IS ${negated ? 'NOT ' : ''}NULL`, values: [] }
+      }
+      return {
+        sql: `${column} ${negated ? '!=' : '='} ?`,
+        values: [toColumnValue(clause.value) as ColumnValue],
+      }
+    }
+    case 'in':
+    case 'not_in': {
+      const list = (Array.isArray(clause.value) ? clause.value : [clause.value]).map(
+        (value) => toColumnValue(value) as ColumnValue,
+      )
+      if (list.length === 0) {
+        return { sql: operator === 'in' ? '0 = 1' : '1 = 1', values: [] }
+      }
+      const negation = operator === 'not_in' ? 'NOT IN' : 'IN'
+      return { sql: `${column} ${negation} (${placeholders(list.length)})`, values: list }
+    }
+    case 'lt':
+    case 'lte':
+    case 'gt':
+    case 'gte':
+      return {
+        sql: `${column} ${COMPARISONS[operator]} ?`,
+        values: [toColumnValue(clause.value) as ColumnValue],
+      }
+    case 'contains':
+    case 'starts_with':
+    case 'ends_with':
+      return {
+        sql: `${column} LIKE ?`,
+        values: [likeValue(operator, toColumnValue(clause.value) as ColumnValue)],
+      }
+    default: {
+      const unhandled: never = operator
+      throw new Error(`Registry adapter cannot translate "${String(unhandled)}" on ${clause.field}`)
+    }
+  }
+}
+
+/** The one Registry object, named here so no caller repeats the name. */
+export function registryStub(env: Env) {
+  return env.REGISTRY.get(env.REGISTRY.idFromName('registry'))
+}
+
+export function publicApp(row: NewAppRecord): AppRecord {
+  const { secret, ...app } = row
+  return app
 }
 
 export class Registry extends DurableObject<Env> {
@@ -284,9 +314,7 @@ export class Registry extends DurableObject<Env> {
     if (this.appById(appId) === null) return null
     this.sql.exec('UPDATE app SET name = ? WHERE app_id = ?', name, appId)
     const row = this.appById(appId)
-    return row === null
-      ? null
-      : { id: row.id, key: row.key, name: row.name, created_at: row.created_at }
+    return row === null ? null : publicApp(row)
   }
 
   deleteApp(appId: string): boolean {
@@ -419,7 +447,7 @@ export class Registry extends DurableObject<Env> {
 
 function rowWhere(row: Row): CleanedWhere[] {
   return Object.entries(row).flatMap(([field, value]) =>
-    value === null
+    value === null || value === undefined
       ? []
       : [
           {

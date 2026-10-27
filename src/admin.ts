@@ -3,15 +3,13 @@ import { Hono } from 'hono'
 import * as v from 'valibot'
 import type { AppBindings } from './env'
 import type { Registry } from './registry'
+import { publicApp, registryStub } from './registry'
 import { createAuth } from './session'
 
 type AdminEnv = {
   Bindings: AppBindings
   Variables: { registry: DurableObjectStub<Registry> }
 }
-
-/** Where better-auth's own endpoints live; the admin API sits beside them. */
-export const AUTH_BASE_PATH = '/api/auth'
 
 const createAppSchema = v.object({
   name: v.pipe(v.string(), v.trim(), v.minLength(1), v.maxLength(100)),
@@ -21,22 +19,26 @@ const settingsSchema = v.object({
   signup_enabled: v.boolean(),
 })
 
+/**
+ * Mounted under `/api`, so `/auth/*` is better-auth's `/api/auth/*` and the
+ * routes below sit beside it.
+ */
 export const adminRoutes = new Hono<AdminEnv>()
 
 adminRoutes.use('*', async (c, next) => {
-  c.set('registry', c.env.REGISTRY.get(c.env.REGISTRY.idFromName('registry')))
+  c.set('registry', registryStub(c.env))
   await next()
 })
 
-adminRoutes.all(`${AUTH_BASE_PATH}/*`, async (c) => {
+adminRoutes.all('/auth/*', async (c) => {
   const auth = createAuth(c.var.registry, c.env, c.req.raw)
   return auth.handler(c.req.raw)
 })
 
-adminRoutes.get('/api/settings', ...adminOnly(async (c) => c.json(await c.var.registry.settings())))
+adminRoutes.get('/settings', ...adminOnly(async (c) => c.json(await c.var.registry.settings())))
 
 adminRoutes.patch(
-  '/api/settings',
+  '/settings',
   ...adminOnly(async (c) => {
     const body = await readJson(c)
     if (body === null) return c.json({ error: 'Invalid JSON body' }, 400)
@@ -46,10 +48,10 @@ adminRoutes.patch(
   }),
 )
 
-adminRoutes.get('/api/apps', ...adminOnly(async (c) => c.json(await c.var.registry.apps())))
+adminRoutes.get('/apps', ...adminOnly(async (c) => c.json(await c.var.registry.apps())))
 
 adminRoutes.post(
-  '/api/apps',
+  '/apps',
   ...adminOnly(async (c) => {
     const body = await readJson(c)
     if (body === null) return c.json({ error: 'Invalid JSON body' }, 400)
@@ -63,7 +65,7 @@ adminRoutes.post(
 )
 
 adminRoutes.patch(
-  '/api/apps/:appId',
+  '/apps/:appId',
   ...adminOnly(async (c) => {
     const body = await readJson(c)
     if (body === null) return c.json({ error: 'Invalid JSON body' }, 400)
@@ -77,17 +79,16 @@ adminRoutes.patch(
 )
 
 adminRoutes.get(
-  '/api/apps/:appId',
+  '/apps/:appId',
   ...adminOnly(async (c) => {
     const found = await c.var.registry.appById(c.req.param('appId') ?? '')
     if (found === null) return c.json({ error: 'App not found' }, 404)
-    const { id, key, name, created_at } = found
-    return c.json({ id, key, name, created_at })
+    return c.json(publicApp(found))
   }),
 )
 
 adminRoutes.delete(
-  '/api/apps/:appId',
+  '/apps/:appId',
   ...adminOnly(async (c) => {
     const deleted = await c.var.registry.deleteApp(c.req.param('appId') ?? '')
     if (!deleted) return c.json({ error: 'App not found' }, 404)

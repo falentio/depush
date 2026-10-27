@@ -5,8 +5,6 @@ import { betterAuth } from 'better-auth/minimal'
 import type { AppBindings } from './env'
 import type { AuthQuery, AuthQueryResult, Registry } from './registry'
 
-export type Auth = ReturnType<typeof createAuth>
-
 export type RegistryStub = DurableObjectStub<Registry>
 
 type Row = Record<string, unknown>
@@ -127,7 +125,8 @@ function asRows(value: AuthQueryResult): Row[] {
 }
 
 function asCount(value: AuthQueryResult): number {
-  return typeof value === 'number' ? value : 0
+  if (typeof value !== 'number') throw new Error('Registry adapter expected a count')
+  return value
 }
 
 function requireSecret(env: AppBindings): string {

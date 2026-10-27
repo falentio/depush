@@ -22,6 +22,7 @@ import {
   isWebSocketUpgrade,
   upgradeRejected,
 } from './protocol'
+import { registryStub } from './registry'
 
 export { Channel } from './channel'
 export { AppHub } from './hub'
@@ -47,12 +48,12 @@ type SignedRequest =
 
 const app = new Hono<{ Bindings: AppBindings }>()
 
-app.route('/', adminRoutes)
+app.route('/api', adminRoutes)
 
 app.get('/healthz', (c) => c.json({ status: 'ok' }))
 
 app.get('/app/:key', async (c) => {
-  const found = await registry(c).appByKey(c.req.param('key'))
+  const found = await registryStub(c.env).appByKey(c.req.param('key'))
   if (found === null) {
     return upgradeRejected(c.req.raw, PUSHER_ERROR_NO_APP, 'Application does not exist')
   }
@@ -219,10 +220,6 @@ app.notFound((c) => {
   return c.json({ error: 'Not found' }, 404)
 })
 
-function registry(c: AppContext) {
-  return c.env.REGISTRY.get(c.env.REGISTRY.idFromName('registry'))
-}
-
 function appHub(c: AppContext, config: AppConfig) {
   return c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
 }
@@ -242,7 +239,7 @@ async function signedRequest(c: AppContext): Promise<SignedRequest> {
     return { ok: false, response: c.json({ error: 'Invalid app id' }, 401) }
   }
 
-  const found = await registry(c).appById(appId)
+  const found = await registryStub(c.env).appById(appId)
   if (found === null) {
     return { ok: false, response: c.json({ error: 'Invalid app id' }, 401) }
   }
