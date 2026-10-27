@@ -16,6 +16,7 @@ export default defineConfig({
     VitePWA({
       registerType: 'prompt',
       injectRegister: false,
+      includeManifestIcons: false,
       devOptions: { enabled: false },
       manifest: {
         id: '/console',
@@ -40,7 +41,7 @@ export default defineConfig({
         ],
       },
       workbox: {
-        globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],
+        globPatterns: ['**/*.{js,css,html,svg,png,ico}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: WORKER_PREFIXES.map((prefix) => new RegExp(`^${prefix}(?:/|$)`)),
         cleanupOutdatedCaches: true,
