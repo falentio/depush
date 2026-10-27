@@ -71,7 +71,7 @@ curl http://localhost:5173/healthz
 # {"status":"ok"}
 ```
 
-The first account you sign up becomes the admin. Create it, then use its session cookie to create
+The first account you create becomes the admin. Create it, then use its session cookie to create
 an app. better-auth requires an `Origin` header, so send one that matches the server:
 
 ```sh
@@ -136,7 +136,7 @@ await server.trigger('public-smoke', 'greeting', { hello: 'world' })
 The Worker serves an installable admin console at `/console`. Open
 `http://localhost:5173/console` in development, or `https://<your-worker>/console` after deploying.
 
-The first account you sign up becomes the admin. The console lists apps, creates one with a
+The first account you create becomes the admin. The console lists apps, creates one with a
 one-time secret you can copy as a `.env` block, renames and deletes apps, and toggles sign-ups. A
 later account can sign in but lands on a page explaining that only an admin can manage apps.
 
