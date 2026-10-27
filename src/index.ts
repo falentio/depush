@@ -11,9 +11,16 @@ import {
   channelUsers,
   parseBatch,
   parseChannelInfo,
+  parseHistoryQuery,
   parseTrigger,
 } from './events'
-import { isCacheChannel, isValidChannelName, isWebSocketUpgrade, upgradeRejected } from './protocol'
+import {
+  channelKind,
+  isCacheChannel,
+  isValidChannelName,
+  isWebSocketUpgrade,
+  upgradeRejected,
+} from './protocol'
 
 export { Channel } from './channel'
 export { AppHub } from './hub'
@@ -23,6 +30,7 @@ const PUSHER_ERROR_NO_APP = 4001
 const PUSHER_ERROR_PATH_NOT_FOUND = 4005
 const PUSHER_ERROR_UNSUPPORTED_PROTOCOL = 4007
 const PUSHER_ERROR_NO_PROTOCOL = 4008
+const PRESENCE_ONLY = 'presence is only available for presence channels'
 
 type AppContext = Context<{ Bindings: AppBindings }>
 
@@ -127,6 +135,39 @@ app.get('/apps/:appId/channels/:channelName/users', async (c) => {
   if (!result.ok) return c.json({ error: result.error }, 400)
 
   return c.json(result.body)
+})
+
+app.get('/apps/:appId/channels/:channelName/history', async (c) => {
+  const signed = await signedRequest(c)
+  if (!signed.ok) return signed.response
+
+  const channelName = c.req.param('channelName')
+  if (!isValidChannelName(channelName)) {
+    return c.json({ error: 'Invalid channel name' }, 400)
+  }
+
+  const parsed = parseHistoryQuery(c.req.query('limit'), c.req.query('before'))
+  if (!parsed.ok) return c.json({ error: parsed.error }, 400)
+
+  return c.json(await channelState(c, signed.config, channelName).history(parsed.query))
+})
+
+app.get('/apps/:appId/channels/:channelName/presence', async (c) => {
+  const signed = await signedRequest(c)
+  if (!signed.ok) return signed.response
+
+  const channelName = c.req.param('channelName')
+  if (!isValidChannelName(channelName)) {
+    return c.json({ error: 'Invalid channel name' }, 400)
+  }
+  if (channelKind(channelName) !== 'presence') {
+    return c.json({ error: PRESENCE_ONLY }, 400)
+  }
+
+  const presence = await appHub(c, signed.config).presenceInfo(channelName)
+  if (presence === null) return c.json({ error: PRESENCE_ONLY }, 400)
+
+  return c.json({ presence })
 })
 
 app.get('/apps/:appId/channels/:channelName', async (c) => {

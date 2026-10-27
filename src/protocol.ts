@@ -35,6 +35,12 @@ export type PresenceMember = {
   userInfo: Record<string, unknown>
 }
 
+export type PresenceState = {
+  ids: string[]
+  hash: Record<string, Record<string, unknown>>
+  count: number
+}
+
 export type FrameParse = { ok: true; frame: ClientFrame } | { ok: false }
 
 export const channelNameSchema = v.pipe(
@@ -150,14 +156,28 @@ export function subscriptionSucceeded(channel: string): string {
 }
 
 export function presenceSubscriptionSucceeded(channel: string, members: PresenceMember[]): string {
-  const hash = Object.fromEntries(members.map((member) => [member.userId, member.userInfo]))
   return JSON.stringify({
     event: 'pusher_internal:subscription_succeeded',
     channel,
-    data: JSON.stringify({
-      presence: { ids: members.map((member) => member.userId), hash, count: members.length },
-    }),
+    data: JSON.stringify({ presence: presenceState(members) }),
   })
+}
+
+export function presenceState(members: PresenceMember[]): PresenceState {
+  const unique = new Map<string, PresenceMember>()
+  for (const member of members) {
+    if (!unique.has(member.userId)) unique.set(member.userId, member)
+  }
+
+  const sorted = [...unique.values()].sort((left, right) =>
+    left.userId < right.userId ? -1 : left.userId > right.userId ? 1 : 0,
+  )
+
+  return {
+    ids: sorted.map((member) => member.userId),
+    hash: Object.fromEntries(sorted.map((member) => [member.userId, member.userInfo])),
+    count: sorted.length,
+  }
 }
 
 export function memberAdded(channel: string, member: PresenceMember): string {

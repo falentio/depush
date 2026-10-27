@@ -7,7 +7,7 @@ import { readConfig } from './config'
 import type { AppBindings } from './env'
 import type { ChannelSnapshot } from './events'
 import { dataBytes, MAX_DATA_BYTES } from './events'
-import type { ClientFrame, PresenceMember } from './protocol'
+import type { ClientFrame, PresenceMember, PresenceState } from './protocol'
 import {
   cacheMiss,
   channelEvent,
@@ -23,6 +23,7 @@ import {
   newSocketId,
   parseFrame,
   pong,
+  presenceState,
   presenceSubscriptionSucceeded,
   subscriptionSucceeded,
 } from './protocol'
@@ -148,6 +149,12 @@ export class AppHub extends DurableObject<AppBindings> {
 
   async channelSnapshot(): Promise<ChannelSnapshot> {
     return aggregateChannels(this.socketStates())
+  }
+
+  async presenceInfo(channel: string): Promise<PresenceState | null> {
+    if (channelKind(channel) !== 'presence') return null
+
+    return presenceState(collectPresenceMembers(this.socketStates(), channel, undefined))
   }
 
   override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
@@ -363,13 +370,11 @@ export class AppHub extends DurableObject<AppBindings> {
   }
 
   private async recordEvent(channel: string, input: RecordedEvent): Promise<void> {
-    if (!input.cache || !isCacheChannel(channel)) return
-
     await this.channelState(channel).record({
       name: input.name,
       data: input.data,
       userId: input.userId,
-      cache: input.cache,
+      cache: input.cache && isCacheChannel(channel),
       ttlSeconds: this.config.cacheTtlSeconds,
     })
   }

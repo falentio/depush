@@ -28,6 +28,29 @@ export type TriggerResult = { ok: true; trigger: Trigger } | ParseFailure
 
 export type BatchResult = { ok: true; events: BatchEvent[] } | ParseFailure
 
+export const DEFAULT_HISTORY_LIMIT = 50
+export const MAX_HISTORY_LIMIT = 100
+
+export type HistoryEvent = {
+  id: number
+  name: string
+  data: string
+  user_id?: string
+  published_at: string
+}
+
+export type HistoryPage = {
+  events: HistoryEvent[]
+  next_cursor: string | null
+}
+
+export type HistoryQuery = {
+  limit: number
+  before: number | undefined
+}
+
+export type HistoryQueryParse = { ok: true; query: HistoryQuery } | { ok: false; error: string }
+
 export type ChannelInfoRequest = {
   userCount: boolean
   subscriptionCount: boolean
@@ -88,6 +111,23 @@ const batchEventSchema = v.object({
 const batchSchema = v.object({
   batch: v.pipe(v.array(batchEventSchema), v.minLength(1), v.maxLength(MAX_BATCH_EVENTS)),
 })
+
+const historyLimitSchema = v.pipe(
+  v.string(),
+  v.regex(/^\d+$/),
+  v.transform(Number),
+  v.integer(),
+  v.minValue(1),
+  v.maxValue(MAX_HISTORY_LIMIT),
+)
+
+const historyBeforeSchema = v.pipe(
+  v.string(),
+  v.regex(/^\d+$/),
+  v.transform(Number),
+  v.integer(),
+  v.minValue(1),
+)
 
 const INFO_ATTRIBUTES = new Map<string, 'userCount' | 'subscriptionCount' | 'cache'>([
   ['user_count', 'userCount'],
@@ -170,6 +210,31 @@ export function parseBatch(body: Uint8Array): BatchResult {
   }
 
   return { ok: true, events }
+}
+
+export function parseHistoryQuery(
+  limitRaw: string | undefined,
+  beforeRaw: string | undefined,
+): HistoryQueryParse {
+  let limit = DEFAULT_HISTORY_LIMIT
+  if (limitRaw !== undefined) {
+    const parsed = v.safeParse(historyLimitSchema, limitRaw)
+    if (!parsed.success) {
+      return { ok: false, error: `limit must be an integer from 1 to ${MAX_HISTORY_LIMIT}` }
+    }
+    limit = parsed.output
+  }
+
+  if (beforeRaw === undefined) {
+    return { ok: true, query: { limit, before: undefined } }
+  }
+
+  const parsed = v.safeParse(historyBeforeSchema, beforeRaw)
+  if (!parsed.success) {
+    return { ok: false, error: 'before must be a positive integer' }
+  }
+
+  return { ok: true, query: { limit, before: parsed.output } }
 }
 
 export function dataBytes(data: unknown): number {
