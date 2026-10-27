@@ -153,6 +153,16 @@ describe('admin gate', () => {
     expect((await request('/api/settings')).status).toBe(401)
   })
 
+  it('does not run the handler behind a rejected request', async () => {
+    const client = await adminClient()
+    const before = await readJsonList(client, '/api/apps')
+
+    const smuggled = await request('/api/apps', json({ name: 'smuggled' }))
+    expect(smuggled.status).toBe(401)
+
+    expect(await readJsonList(client, '/api/apps')).toEqual(before)
+  })
+
   it('rejects a signed-in non-admin with 403', async () => {
     await adminClient()
     const { client, user } = await signUp()
