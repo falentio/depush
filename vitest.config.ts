@@ -9,6 +9,7 @@ export default defineConfig({
         bindings: {
           BETTER_AUTH_SECRET: 'test-better-auth-secret-value-0123456789',
           BETTER_AUTH_URL: 'http://depush.test',
+          LOG_LEVEL: 'warning',
         },
       },
     }),
