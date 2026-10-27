@@ -53,12 +53,14 @@ app.get('/healthz', (c) => c.json({ status: 'ok' }))
 
 app.get('/app/:key', async (c) => {
   const found = await registry(c).appByKey(c.req.param('key'))
-  const rejection = handshakeRejection(c.req.query('protocol'), found !== null)
+  if (found === null) {
+    return upgradeRejected(c.req.raw, PUSHER_ERROR_NO_APP, 'Application does not exist')
+  }
+
+  const rejection = handshakeRejection(c.req.query('protocol'))
   if (rejection !== null) {
     return upgradeRejected(c.req.raw, rejection.code, rejection.message)
   }
-  if (found === null)
-    return upgradeRejected(c.req.raw, PUSHER_ERROR_NO_APP, 'Application does not exist')
 
   const config = appConfig(found, readSettings(c.env))
   const hub = c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
@@ -257,13 +259,7 @@ async function signedRequest(c: AppContext): Promise<SignedRequest> {
   return { ok: true, config, body: capped.body }
 }
 
-function handshakeRejection(
-  protocol: string | undefined,
-  exists: boolean,
-): HandshakeRejection | null {
-  if (!exists) {
-    return { code: PUSHER_ERROR_NO_APP, message: 'Application does not exist' }
-  }
+function handshakeRejection(protocol: string | undefined): HandshakeRejection | null {
   if (protocol === undefined) {
     return { code: PUSHER_ERROR_NO_PROTOCOL, message: 'No protocol version supplied' }
   }
