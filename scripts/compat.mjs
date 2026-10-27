@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
 import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createServer as createHttpServer } from 'node:http'
 import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import PusherServer from 'pusher'
@@ -13,6 +14,8 @@ const APP_ID = '1'
 const APP_KEY = 'test-key'
 const APP_SECRET = 'test-secret'
 const CHANNEL = 'public-smoke'
+const PRIVATE_CHANNEL = 'private-room'
+const PRESENCE_CHANNEL = 'presence-room'
 const DEV_VARS = '.dev.vars'
 const DEV_VARS_BACKUP = '.dev.vars.compat-backup'
 const DEV_VARS_CONTENT = [
@@ -92,7 +95,54 @@ async function waitForHealthz(baseUrl) {
   throw new Error('Dev server did not answer /healthz within 30s')
 }
 
-function createClient(port) {
+function startAuthServer(port) {
+  const server = createHttpServer((request, response) => {
+    let body = ''
+    request.setEncoding('utf8')
+    request.on('data', (chunk) => {
+      body += chunk
+    })
+    request.on('end', () => {
+      const params = new URLSearchParams(body)
+      const socketId = params.get('socket_id') ?? ''
+      const channelName = params.get('channel_name') ?? ''
+      const user = params.get('user') ?? 'alice'
+      const payload = authResponse(socketId, channelName, user)
+      response.writeHead(200, { 'content-type': 'application/json' })
+      response.end(JSON.stringify(payload))
+    })
+  })
+  return new Promise((resolve) => server.listen(port, HOST, () => resolve(server)))
+}
+
+function authResponse(socketId, channelName, user) {
+  if (user === 'tampered') {
+    return { auth: `${APP_KEY}:${'0'.repeat(64)}` }
+  }
+
+  if (channelName.startsWith('presence-')) {
+    const channelData = JSON.stringify({ user_id: user, user_info: { name: capitalize(user) } })
+    const signature = createHmac('sha256', APP_SECRET)
+      .update(`${socketId}:${channelName}:${channelData}`)
+      .digest('hex')
+    return { auth: `${APP_KEY}:${signature}`, channel_data: channelData }
+  }
+
+  const signature = createHmac('sha256', APP_SECRET)
+    .update(`${socketId}:${channelName}`)
+    .digest('hex')
+  return { auth: `${APP_KEY}:${signature}` }
+}
+
+function capitalize(value) {
+  return `${value.slice(0, 1).toUpperCase()}${value.slice(1)}`
+}
+
+function stopAuthServer(server) {
+  return new Promise((resolve) => server.close(resolve))
+}
+
+function createClient(port, authPort, user) {
   return new Pusher(APP_KEY, {
     cluster: 'mt1',
     wsHost: HOST,
@@ -101,6 +151,11 @@ function createClient(port) {
     forceTLS: false,
     enabledTransports: ['ws'],
     disableStats: true,
+    channelAuthorization: {
+      endpoint: `http://${HOST}:${authPort}/auth`,
+      transport: 'ajax',
+      params: { user },
+    },
   })
 }
 
@@ -180,26 +235,147 @@ async function checkPingPong(server, channelA) {
   assert.deepEqual(await alive, { alive: true })
 }
 
+async function checkPrivateDelivery(server, channel) {
+  const received = waitForEvent(channel, 'private-greeting', 'private event')
+  await server.trigger(PRIVATE_CHANNEL, 'private-greeting', { hello: 'private' })
+  assert.deepEqual(await received, { hello: 'private' })
+}
+
+async function checkTamperedChannelAuth(port, authPort) {
+  const client = createClient(port, authPort, 'tampered')
+  clients.push(client)
+
+  const connectionError = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error('Timed out waiting for a PusherError with code 4009'))
+    }, 10_000)
+    client.connection.bind('error', (event) => {
+      clearTimeout(timer)
+      resolve(event)
+    })
+  })
+
+  const channel = client.subscribe(PRIVATE_CHANNEL)
+  let subscribed = false
+  channel.bind('pusher:subscription_succeeded', () => {
+    subscribed = true
+  })
+
+  const error = await connectionError
+  assert.equal(error.type, 'PusherError')
+  assert.equal(error.data.code, 4009)
+  await delay(300)
+  assert.equal(subscribed, false, 'tampered auth reached subscription_succeeded')
+}
+
+async function checkPresenceJoin(port, authPort) {
+  const bobClient = createClient(port, authPort, 'bob')
+  clients.push(bobClient)
+  const bobChannel = bobClient.subscribe(PRESENCE_CHANNEL)
+  const bobMembers = await waitForEvent(
+    bobChannel,
+    'pusher:subscription_succeeded',
+    'bob presence subscription',
+  )
+  assert.equal(bobMembers.count, 1)
+  assert.equal(bobMembers.get('alice'), null)
+
+  const memberAdded = waitForEvent(bobChannel, 'pusher:member_added', 'alice member_added')
+
+  const aliceClient = createClient(port, authPort, 'alice')
+  clients.push(aliceClient)
+  const aliceChannel = aliceClient.subscribe(PRESENCE_CHANNEL)
+  const aliceMembers = await waitForEvent(
+    aliceChannel,
+    'pusher:subscription_succeeded',
+    'alice presence subscription',
+  )
+  assert.equal(aliceMembers.count, 2)
+  assert.deepEqual(aliceMembers.get('alice'), { id: 'alice', info: { name: 'Alice' } })
+
+  assert.deepEqual(await memberAdded, { id: 'alice', info: { name: 'Alice' } })
+  assert.equal(bobChannel.members.count, 2)
+  assert.deepEqual(bobChannel.members.get('alice'), { id: 'alice', info: { name: 'Alice' } })
+
+  return { bobChannel, aliceClient, aliceChannel }
+}
+
+async function checkPresenceLeave(port, authPort, bobChannel, aliceClient) {
+  let added = 0
+  bobChannel.bind('pusher:member_added', () => {
+    added += 1
+  })
+
+  const aliceSecond = createClient(port, authPort, 'alice')
+  clients.push(aliceSecond)
+  const aliceSecondChannel = aliceSecond.subscribe(PRESENCE_CHANNEL)
+  const secondMembers = await waitForEvent(
+    aliceSecondChannel,
+    'pusher:subscription_succeeded',
+    'alice second socket subscription',
+  )
+  assert.equal(secondMembers.count, 2, 'second socket duplicated the member')
+  await delay(300)
+  assert.equal(added, 0, 'second socket for alice emitted member_added')
+  assert.equal(bobChannel.members.count, 2)
+
+  aliceClient.disconnect()
+  await delay(300)
+  assert.equal(bobChannel.members.count, 2, 'first socket leaving removed the member')
+
+  const memberRemoved = waitForEvent(bobChannel, 'pusher:member_removed', 'alice member_removed')
+  aliceSecond.disconnect()
+  assert.deepEqual(await memberRemoved, { id: 'alice', info: { name: 'Alice' } })
+  assert.equal(bobChannel.members.count, 1)
+  assert.equal(bobChannel.members.get('alice'), null)
+}
+
+async function checkChannelIsolation(server, bobChannel, publicChannel, privateChannel) {
+  const presenceEvent = waitForEvent(bobChannel, 'presence-greeting', 'presence event')
+  await server.trigger(PRESENCE_CHANNEL, 'presence-greeting', { hello: 'presence' })
+  assert.deepEqual(await presenceEvent, { hello: 'presence' })
+
+  let leaked = false
+  publicChannel.bind('private-only', () => {
+    leaked = true
+  })
+
+  const privateEvent = waitForEvent(privateChannel, 'private-only', 'private event after tamper')
+  await server.trigger(PRIVATE_CHANNEL, 'private-only', { hello: 'private' })
+  assert.deepEqual(await privateEvent, { hello: 'private' })
+  await delay(300)
+  assert.equal(leaked, false, 'public-only client received a private event')
+}
+
 const checks = [
   ['pusher-js connects and subscribes to public-smoke', null],
   ['pusher SDK trigger reaches pusher-js', null],
   ['socket_id exclusion skips the targeted socket', null],
   ['tampered auth_signature returns 401', null],
   ['socket survives 3s with a 1s activity timeout', null],
+  ['pusher-js subscribes to private-room and receives a triggered event', null],
+  ['tampered channel auth never subscribes and reports PusherError 4009', null],
+  ['presence join sends member_added and lists the member', null],
+  ['presence leave fires member_removed only for the last socket', null],
+  ['presence events arrive and private events do not leak', null],
 ]
 
 const port = Number(process.env.PUSHER_COMPAT_PORT ?? (await findFreePort(DEFAULT_PORT)))
 const baseUrl = `http://${HOST}:${port}`
+const authPort = await findFreePort(port + 1)
+const authUrl = `http://${HOST}:${authPort}/auth`
 
 backupDevVars()
+const authServer = await startAuthServer(authPort)
 const server = startServer(port)
 const clients = []
 
 try {
   await waitForHealthz(baseUrl)
   console.log(`dev server on ${baseUrl}`)
+  console.log(`auth server on ${authUrl}`)
 
-  const clientA = createClient(port)
+  const clientA = createClient(port, authPort, 'alice')
   clients.push(clientA)
   const channelA = await subscribe(clientA)
   checks[0][1] = true
@@ -218,7 +394,7 @@ try {
   checks[1][1] = true
   console.log(`PASS 2 ${checks[1][0]}`)
 
-  const clientB = createClient(port)
+  const clientB = createClient(port, authPort, 'alice')
   clients.push(clientB)
   const channelB = await subscribe(clientB)
   await checkSocketExclusion(pusherServer, clientA, channelA, channelB)
@@ -232,6 +408,31 @@ try {
   await checkPingPong(pusherServer, channelA)
   checks[4][1] = true
   console.log(`PASS 5 ${checks[4][0]}`)
+
+  const privateClient = createClient(port, authPort, 'alice')
+  clients.push(privateClient)
+  const privateChannel = privateClient.subscribe(PRIVATE_CHANNEL)
+  await waitForEvent(privateChannel, 'pusher:subscription_succeeded', 'private subscription')
+  await checkPrivateDelivery(pusherServer, privateChannel)
+  checks[5][1] = true
+  console.log(`PASS 6 ${checks[5][0]}`)
+
+  await checkTamperedChannelAuth(port, authPort)
+  await checkPrivateDelivery(pusherServer, privateChannel)
+  checks[6][1] = true
+  console.log(`PASS 7 ${checks[6][0]}`)
+
+  const presence = await checkPresenceJoin(port, authPort)
+  checks[7][1] = true
+  console.log(`PASS 8 ${checks[7][0]}`)
+
+  await checkPresenceLeave(port, authPort, presence.bobChannel, presence.aliceClient)
+  checks[8][1] = true
+  console.log(`PASS 9 ${checks[8][0]}`)
+
+  await checkChannelIsolation(pusherServer, presence.bobChannel, channelA, privateChannel)
+  checks[9][1] = true
+  console.log(`PASS 10 ${checks[9][0]}`)
 } catch (error) {
   for (let index = 0; index < checks.length; index += 1) {
     if (checks[index][1] === null) {
@@ -243,6 +444,7 @@ try {
 } finally {
   for (const client of clients) client.disconnect()
   await stopServer(server)
+  await stopAuthServer(authServer)
   restoreDevVars()
 }
 
