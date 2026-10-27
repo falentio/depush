@@ -24,7 +24,7 @@ pnpm dev          # http://127.0.0.1:5173, Worker served by the Cloudflare Vite 
 pnpm compat       # starts its own dev server on 127.0.0.1:8787 and proves the official SDKs work
 ```
 
-`pnpm compat` backs up `.dev.vars`, writes test credentials, runs the checks, and restores it.
+`pnpm compat` starts its own dev server on `127.0.0.1` (port 8787 when free, the next free port otherwise), backs up `.dev.vars`, writes test credentials, runs the checks, and restores it.
 
 ## Client
 

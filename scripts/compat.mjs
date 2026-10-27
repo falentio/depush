@@ -2,13 +2,13 @@ import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
 import { createHash, createHmac } from 'node:crypto'
 import { existsSync, renameSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createServer } from 'node:net'
 import { setTimeout as delay } from 'node:timers/promises'
 import PusherServer from 'pusher'
 import Pusher from 'pusher-js'
 
 const HOST = '127.0.0.1'
-const PORT = Number(process.env.PUSHER_COMPAT_PORT ?? 8787)
-const BASE_URL = `http://${HOST}:${PORT}`
+const DEFAULT_PORT = 8787
 const APP_ID = '1'
 const APP_KEY = 'test-key'
 const APP_SECRET = 'test-secret'
@@ -25,6 +25,22 @@ const DEV_VARS_CONTENT = [
 
 let serverLog = ''
 
+async function findFreePort(start) {
+  for (let port = start; port < start + 20; port += 1) {
+    if (await isPortFree(port)) return port
+  }
+  throw new Error(`No free port between ${start} and ${start + 19}`)
+}
+
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const probe = createServer()
+    probe.once('error', () => resolve(false))
+    probe.once('listening', () => probe.close(() => resolve(true)))
+    probe.listen(port, HOST)
+  })
+}
+
 function backupDevVars() {
   if (existsSync(DEV_VARS)) renameSync(DEV_VARS, DEV_VARS_BACKUP)
   writeFileSync(DEV_VARS, DEV_VARS_CONTENT)
@@ -38,10 +54,10 @@ function restoreDevVars() {
   }
 }
 
-function startServer() {
+function startServer(port) {
   const child = spawn(
     'pnpm',
-    ['exec', 'vite', '--host', HOST, '--port', String(PORT), '--strictPort'],
+    ['exec', 'vite', '--host', HOST, '--port', String(port), '--strictPort'],
     { detached: true, stdio: ['ignore', 'pipe', 'pipe'] },
   )
   const collect = (chunk) => {
@@ -63,11 +79,11 @@ async function stopServer(child) {
   } catch {}
 }
 
-async function waitForHealthz() {
+async function waitForHealthz(baseUrl) {
   const deadline = Date.now() + 30_000
   while (Date.now() < deadline) {
     try {
-      const response = await fetch(`${BASE_URL}/healthz`)
+      const response = await fetch(`${baseUrl}/healthz`)
       const body = await response.json()
       if (response.ok && body.status === 'ok') return
     } catch {}
@@ -76,12 +92,12 @@ async function waitForHealthz() {
   throw new Error('Dev server did not answer /healthz within 30s')
 }
 
-function createClient() {
+function createClient(port) {
   return new Pusher(APP_KEY, {
     cluster: 'mt1',
     wsHost: HOST,
-    wsPort: PORT,
-    wssPort: PORT,
+    wsPort: port,
+    wssPort: port,
     forceTLS: false,
     enabledTransports: ['ws'],
     disableStats: true,
@@ -127,7 +143,7 @@ async function checkSocketExclusion(server, clientA, channelA, channelB) {
   assert.equal(receivedByA, false, 'A received an event targeted at its own socket_id')
 }
 
-async function checkTamperedSignature() {
+async function checkTamperedSignature(baseUrl) {
   const body = JSON.stringify({ name: 'tamper', channels: [CHANNEL], data: '{}' })
   const timestamp = Math.floor(Date.now() / 1000)
   const query =
@@ -139,7 +155,7 @@ async function checkTamperedSignature() {
 
   const send = async (sig) => {
     const response = await fetch(
-      `${BASE_URL}/apps/${APP_ID}/events?${query}&auth_signature=${sig}`,
+      `${baseUrl}/apps/${APP_ID}/events?${query}&auth_signature=${sig}`,
       {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
@@ -172,14 +188,18 @@ const checks = [
   ['socket survives 3s with a 1s activity timeout', null],
 ]
 
+const port = Number(process.env.PUSHER_COMPAT_PORT ?? (await findFreePort(DEFAULT_PORT)))
+const baseUrl = `http://${HOST}:${port}`
+
 backupDevVars()
-const server = startServer()
+const server = startServer(port)
 const clients = []
 
 try {
-  await waitForHealthz()
+  await waitForHealthz(baseUrl)
+  console.log(`dev server on ${baseUrl}`)
 
-  const clientA = createClient()
+  const clientA = createClient(port)
   clients.push(clientA)
   const channelA = await subscribe(clientA)
   checks[0][1] = true
@@ -190,7 +210,7 @@ try {
     key: APP_KEY,
     secret: APP_SECRET,
     host: HOST,
-    port: String(PORT),
+    port: String(port),
     useTLS: false,
   })
 
@@ -198,14 +218,14 @@ try {
   checks[1][1] = true
   console.log(`PASS 2 ${checks[1][0]}`)
 
-  const clientB = createClient()
+  const clientB = createClient(port)
   clients.push(clientB)
   const channelB = await subscribe(clientB)
   await checkSocketExclusion(pusherServer, clientA, channelA, channelB)
   checks[2][1] = true
   console.log(`PASS 3 ${checks[2][0]}`)
 
-  await checkTamperedSignature()
+  await checkTamperedSignature(baseUrl)
   checks[3][1] = true
   console.log(`PASS 4 ${checks[3][0]}`)
 
