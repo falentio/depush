@@ -22,7 +22,7 @@ Units:
 | ------------------- | ------ | ------- | -------------------------------------------------------------------------------------------------------------------------- |
 | u1-core             | server | landed  | v7 handshake, public channels, ping/pong, signed publish, socket_id exclusion, official SDK harness; depush domain removed |
 | u2-private-presence | server | landed  | private and presence auth, presence membership and member events; encrypted channels stay rejected                         |
-| u3-client-rest      | server | planned | client events and rate limit, batch events, channel and user queries; terminate deferred with user signin                  |
+| u3-client-rest      | server | landed  | client events and rate limit, batch events, channel and user queries; terminate deferred with user signin                  |
 | u4-selfhost         | docs   | planned | README, env example, deploy steps, client configuration, compat script docs                                                |
 | u5-harden           | server | planned | error codes/close codes, limits, hibernation and eviction, raw protocol tests                                              |
 
