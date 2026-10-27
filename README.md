@@ -10,15 +10,16 @@ signing the channel auth it already signs. There is no Pusher account in the pat
 ## What it is not
 
 depush has no dashboard, accounts, teams, quotas, or billing. The protocol surface covers publish,
-batch publish, channel queries, presence, and client events. These are not implemented:
+batch publish, channel queries, presence, cache channels, and client events. These are not
+implemented:
 
 - Webhooks.
-- Cache channels.
 - Encrypted channels.
 - User signin and watchlists.
 - Connection termination.
 - Publish `info`, on a single event or on a batch event.
 - Event history.
+- A presence-info API.
 
 ## Support
 
@@ -30,10 +31,10 @@ batch publish, channel queries, presence, and client events. These are not imple
 | Client events                 | Supported on private and presence channels                       |
 | HTTP publish                  | Supported, with `socket_id` exclusion                            |
 | Batch publish                 | Supported, 1 to 10 events                                        |
-| Channel list and channel info | Supported, with `user_count` and `subscription_count`            |
+| Channel list and channel info | Supported, with `user_count`, `subscription_count`, and `cache`  |
 | Presence users                | Supported                                                        |
 | Webhooks                      | Not supported. The Worker makes no outbound calls.               |
-| Cache channels                | Not supported. A `cache-*` name is only a channel name.          |
+| Cache channels                | Supported. One cached event per channel, replayed on subscribe   |
 | Encrypted channels            | Not supported. Subscribe gets 4009; publish returns 400          |
 | User signin, watchlists       | Not supported. `pusher:signin` fails parsing and gets 4300       |
 | Connection termination        | Not supported. The route returns 404                             |
@@ -123,15 +124,26 @@ pnpm exec wrangler secret put PUSHER_ACTIVITY_TIMEOUT
 The value is a whole number of seconds, 1 or more. An invalid value falls back to 120, which is
 also the default.
 
+Optional, set how long a cache entry lives:
+
+```sh
+pnpm exec wrangler secret put PUSHER_CACHE_TTL_SECONDS
+```
+
+The value is a whole number of seconds from 1 to 1800. An absent or invalid value falls back to
+1800, and a larger value is clamped to 1800. The ceiling keeps a cached event from outliving the
+30 minutes Pusher allows, and 1800 is also the default.
+
 Build and deploy:
 
 ```sh
 pnpm deploy
 ```
 
-The command runs the Vite build and then `wrangler deploy`, which applies the `v1` Durable Object
-migration and prints the Worker URL. To serve it on your own hostname, add a custom domain or
-route for the Worker in the Cloudflare dashboard. The zone must belong to the same account.
+The command runs the Vite build and then `wrangler deploy`, which applies the `v1` and `v2`
+Durable Object migrations and prints the Worker URL. To serve it on your own hostname, add a
+custom domain or route for the Worker in the Cloudflare dashboard. The zone must belong to the
+same account.
 
 ## Client configuration
 
@@ -241,6 +253,45 @@ non-empty string or a number, `user_info` is an object, and members dedupe by `S
 A rejected auth and any `private-encrypted-` channel get `pusher:error` code 4009 and a socket
 close with code 4009.
 
+## Cache channels
+
+A cache channel remembers the last event your server published to it, and replays that event to
+every new subscriber. There are three prefixes:
+
+| Prefix            | Channel kind                                |
+| ----------------- | ------------------------------------------- |
+| `cache-`          | Public                                      |
+| `private-cache-`  | Private, with the same auth as `private-`   |
+| `presence-cache-` | Presence, with the same auth as `presence-` |
+
+`private-encrypted-cache-*` stays an encrypted channel and gets 4009.
+
+Only HTTP publishing fills the cache: `POST /apps/:appId/events` and
+`POST /apps/:appId/batch_events`. The last published event wins, so a publish with a `socket_id`
+exclusion still updates the cache, and the last event of a batch is the one kept. A client event
+is delivered live but never cached. The replay is a read, so it is not recorded as a new publish
+and does not reset the cache TTL.
+
+A new subscriber first receives `pusher_internal:subscription_succeeded` and then, when the cache
+holds an unexpired event, that event as a normal channel event:
+
+```json
+{ "event": "greeting", "channel": "cache-smoke", "data": "{\"hello\":\"world\"}" }
+```
+
+`data` is the exact string your server published. When nothing is cached, or the entry expired,
+the subscriber receives a miss instead:
+
+```json
+{ "event": "pusher:cache_miss", "channel": "cache-smoke", "data": "{}" }
+```
+
+The replay and the miss go only to the subscribing socket. Subscribing twice replays the cache
+twice. Publishing before anyone subscribes stores the event, so the first subscriber gets it too.
+
+An entry lives for `PUSHER_CACHE_TTL_SECONDS`, which defaults to 1800 seconds and cannot exceed
+1800. Expired entries are dropped the next time the cache is read.
+
 ## API
 
 | Method | Path                                       | Auth            | Purpose                       |
@@ -271,14 +322,16 @@ name, an encrypted channel, or an `info` field is at fault. The response is `{}`
 
 Channel list and info take two query parameters:
 
-| Parameter          | Values                                                         |
-| ------------------ | -------------------------------------------------------------- |
-| `filter_by_prefix` | A channel name prefix, for example `presence-`                 |
-| `info`             | A comma-separated subset of `user_count`, `subscription_count` |
+| Parameter          | Values                                                                      |
+| ------------------ | --------------------------------------------------------------------------- |
+| `filter_by_prefix` | A channel name prefix, for example `presence-`                              |
+| `info`             | A comma-separated subset of `user_count`, `subscription_count`, and `cache` |
 
 `user_count` applies only to presence channels, and the list endpoint needs a `filter_by_prefix`
-that selects presence channels. `subscription_count` applies only to other channels. Asking for
-an attribute that does not apply returns 400, as does an unknown attribute such as `cache`.
+that selects presence channels. `subscription_count` applies only to other channels. `cache`
+applies only to a single channel whose name uses a cache prefix, so the list endpoint rejects it
+with 400, as does a non-cache channel. Asking for an attribute that does not apply returns 400,
+as does an unknown attribute.
 
 A channel name in the path, and `filter_by_prefix` when present, must follow the channel-name rule
 in Limits. A name outside it returns 400.
@@ -288,11 +341,16 @@ Response shapes:
 ```json
 { "channels": { "presence-room": { "user_count": 2 } } }
 { "occupied": true, "subscription_count": 3 }
+{ "occupied": true, "cache": { "data": "{\"hello\":\"world\"}", "ttl": 1793 } }
+{ "occupied": true, "user_count": 2, "cache": null }
 { "users": [ { "id": "alice" }, { "id": "bob" } ] }
 ```
 
 Counts and members come from the live sockets. The users list is deduped and sorted, and only
-presence channels have one.
+presence channels have one. `cache` is the cached event's `data` and its remaining `ttl` in whole
+seconds, or `null` when nothing is cached. It combines with `user_count` on a
+`presence-cache-*` channel and with `subscription_count` on a `cache-*` or `private-cache-*`
+channel.
 
 ## Errors
 
@@ -314,35 +372,46 @@ and 4301 errors leave the connection open.
 
 ## Limits
 
-| Limit                    | Value                                           |
-| ------------------------ | ----------------------------------------------- |
-| Event data               | 10,240 bytes of UTF-8                           |
-| HTTP request body        | 262,144 bytes                                   |
-| WebSocket text frame     | 65,536 bytes of UTF-8, then `pusher:error` 4300 |
-| Channels per publish     | 100                                             |
-| Events per batch         | 10                                              |
-| Client events per socket | 10 per rolling 1000 ms                          |
-| Event name               | 200 characters                                  |
-| Channel name             | 1 to 200 of `A-Za-z0-9_-=@,.;`                  |
-| Apps per deployment      | 1                                               |
+| Limit                     | Value                                           |
+| ------------------------- | ----------------------------------------------- |
+| Event data                | 10,240 bytes of UTF-8                           |
+| HTTP request body         | 262,144 bytes                                   |
+| WebSocket text frame      | 65,536 bytes of UTF-8, then `pusher:error` 4300 |
+| Channels per publish      | 100                                             |
+| Events per batch          | 10                                              |
+| Client events per socket  | 10 per rolling 1000 ms                          |
+| Event name                | 200 characters                                  |
+| Channel name              | 1 to 200 of `A-Za-z0-9_-=@,.;`                  |
+| Cache TTL                 | 1800 seconds, default and maximum               |
+| Cached events per channel | 1, the last server publish                      |
+| Apps per deployment       | 1                                               |
 
 Presence state lives in the live sockets. It is gone when the last socket leaves and the Durable
 Object is evicted, and nothing replays it.
 
+The cache is durable. It survives the hub object and its sockets, and it is replaced only by the
+next server publish or dropped when it expires.
+
 ## Operations
 
-One Durable Object per app, named from `PUSHER_APP_ID`, writes all sockets and channel membership.
-The WebSocket route and the HTTP publish and query routes reach the same object, so a publish
-always sees the subscriptions in one place. The object accepts hibernatable sockets: membership
-lives in each socket's attachment, and a restarted object rebuilds it from the live sockets.
+One `AppHub` Durable Object per app, named from `PUSHER_APP_ID`, writes all sockets and channel
+membership. The WebSocket route and the HTTP publish and query routes reach the same object, so a
+publish always sees the subscriptions in one place. The object accepts hibernatable sockets:
+membership lives in each socket's attachment, and a restarted object rebuilds it from the live
+sockets.
+
+One `Channel` Durable Object per app and channel, named `<PUSHER_APP_ID>:<channel>`, owns the
+durable per-channel cache. A WebSocket can only live in one Durable Object, so `AppHub` keeps the
+sockets and presence while `Channel` keeps the cache. `AppHub` reaches a channel object over RPC
+on publish and on subscribe, and the channel-info route reads it the same way.
 
 There is no D1 database and no other store. Changing `PUSHER_APP_ID` points the Worker at a fresh,
-empty object.
+empty hub and fresh, empty channel objects, so one app's cache is never served to another.
 
-The `v1` migration creates the `AppHub` class as SQLite-backed, which the Workers free plan
-supports. A deployed Worker only applies migration tags it has not seen, so to rename the class or
-change its storage type, add a migration with a new tag. Editing `v1` in place does not update a
-deployed Worker.
+The `v1` migration creates the `AppHub` class as SQLite-backed, and the `v2` migration creates
+`Channel` the same way, which the Workers free plan supports. A deployed Worker only applies
+migration tags it has not seen, so to rename a class or change its storage type, add a migration
+with a new tag. Editing an existing tag in place does not update a deployed Worker.
 
 Run `wrangler tail` to watch requests and logs:
 
@@ -387,17 +456,23 @@ Worker (src/index.ts) [1]
 │       ├── ctx.acceptWebSocket [1b2a]
 │       ├── serializeAttachment({ socketId, subscriptions }) [1b2b]
 │       ├── webSocketMessage [1b2c] → parseFrame: subscribe, unsubscribe, ping, client event
+│       │   ├── subscribe → Channel.snapshot → replay or pusher:cache_miss [1b2c1]
+│       │   └── client event → Channel.record with cache off [1b2c2]
 │       └── webSocketClose [1b2d] → leavePresence → member_removed
 ├── POST /apps/:appId/events [1c]
 │   └── verifyRequest → parseTrigger → AppHub.broadcast [1c1]
+│       ├── Channel.record for each cache channel, before fan-out [1c1a]
+│       └── fan out to AppHub sockets [1c1b]
 ├── POST /apps/:appId/batch_events [1d]
 │   └── verifyRequest → parseBatch → AppHub.broadcast per event [1d1]
 └── GET /apps/:appId/channels[...] [1e]
-    └── verifyRequest → AppHub.channelSnapshot → live attachments [1e1]
+    ├── verifyRequest → AppHub.channelSnapshot → live attachments [1e1]
+    └── info=cache → Channel.cacheInfo [1e2]
 ```
 
 The signed HTTP path and the socket path meet at the same `AppHub` instance, whose id is
-`idFromName(PUSHER_APP_ID)`.
+`idFromName(PUSHER_APP_ID)`. A cache channel also meets a `Channel` instance, whose id is
+`idFromName(<app id>:<channel>)`.
 
 ## Troubleshooting
 
@@ -409,7 +484,8 @@ The signed HTTP path and the socket path meet at the same `AppHub` instance, who
 | Close `4009`                                  | Channel auth rejected, or an encrypted channel                     | Sign `socket_id:channel`, check the key and secret, and send back the exact `channel_data`                                                      |
 | HTTP `401`                                    | A signed request did not verify                                    | Check `auth_key`, the clock skew against 600 s, `body_md5`, and the signed path and query                                                       |
 | `pusher:error` `4301`                         | More than 10 client events in one second                           | Send fewer, or batch them on the server                                                                                                         |
-| HTTP `404`                                    | Route not implemented                                              | Terminate connections and event history do not exist                                                                                            |
+| `pusher:cache_miss`                           | The cache channel holds no unexpired event                         | Publish with the HTTP API, or raise `PUSHER_CACHE_TTL_SECONDS`, up to 1800                                                                      |
+| HTTP `404`                                    | Route not implemented                                              | Terminate connections, event history, and the presence-info API do not exist                                                                    |
 | `pusher:error` `4300`, "Invalid message"      | Unknown frame, such as `pusher:signin`, or an invalid channel name | Send only `pusher:subscribe`, `pusher:unsubscribe`, `pusher:ping`, `pusher:pong`, or `client-*` frames, on a channel that follows the name rule |
 | `pusher:error` `4300`, "Message exceeds 64KB" | A text frame over 64 KiB                                           | Keep each frame under 64 KiB                                                                                                                    |
 | HTTP `413`                                    | The body is over 256 KiB, or the data over 10 KB                   | Send less data, or split the batch                                                                                                              |
