@@ -46,8 +46,8 @@ Units:
 
 | id                  | track  | state   | outcome                                                           |
 | ------------------- | ------ | ------- | ----------------------------------------------------------------- |
-| u6-cache            | server | ready   | per-channel Channel DO, cache replay/miss, cache info, TTL        |
-| u7-history-presence | server | pending | per-channel history API and live presence-info API on the same DO |
+| u6-cache            | server | landed  | per-channel Channel DO, cache replay/miss, cache info, TTL        |
+| u7-history-presence | server | ready   | per-channel history API and live presence-info API on the same DO |
 
 Final verification will grow the compat harness to 40 checks and tag `v0.2.0`. No remote, no PRs.
 
