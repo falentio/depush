@@ -29,21 +29,22 @@ curl -X POST http://localhost:5173/apps \
 
 ## Commands
 
-| Command                  | What it does                                       |
-| ------------------------ | -------------------------------------------------- |
-| `pnpm dev`               | Start the Vite dev server with the Worker runtime. |
-| `pnpm build`             | Build the Worker for production.                   |
-| `pnpm preview`           | Serve the production build locally.                |
-| `pnpm deploy`            | Build, then deploy with Wrangler.                  |
-| `pnpm test`              | Run the Vitest suite inside workerd.               |
-| `pnpm test:watch`        | Rerun tests on change.                             |
-| `pnpm typecheck`         | Type-check with `tsc --noEmit`.                    |
-| `pnpm check`             | Run the Biome lint and format checks.              |
-| `pnpm lint`              | Run Biome lint only.                               |
-| `pnpm format`            | Format with Biome.                                 |
-| `pnpm cf-typegen`        | Regenerate `worker-configuration.d.ts`.            |
-| `pnpm db:migrate:local`  | Apply `migrations/` to the local D1 database.      |
-| `pnpm db:migrate:remote` | Apply `migrations/` to the deployed D1 database.   |
+| Command                  | What it does                                             |
+| ------------------------ | -------------------------------------------------------- |
+| `pnpm dev`               | Start the Vite dev server with the Worker runtime.       |
+| `pnpm build`             | Build the Worker for production.                         |
+| `pnpm preview`           | Serve the production build locally.                      |
+| `pnpm deploy`            | Build, then deploy with Wrangler.                        |
+| `pnpm test`              | Run the Vitest suite inside workerd.                     |
+| `pnpm test:watch`        | Rerun tests on change.                                   |
+| `pnpm typecheck`         | Type-check with `tsc --noEmit`.                          |
+| `pnpm check`             | Run the Biome lint and format checks.                    |
+| `pnpm lint`              | Run Biome lint only.                                     |
+| `pnpm format`            | Format with Biome.                                       |
+| `pnpm cf-typegen`        | Regenerate `worker-configuration.d.ts`.                  |
+| `pnpm db:generate`       | Generate a D1 migration from `src/db/schema.ts`.         |
+| `pnpm db:migrate:local`  | Apply `drizzle/` migrations to the local D1 database.    |
+| `pnpm db:migrate:remote` | Apply `drizzle/` migrations to the deployed D1 database. |
 
 Run `pnpm cf-typegen` after changing `wrangler.jsonc`. It regenerates the binding types,
 including `APP_CHANNEL` as `DurableObjectNamespace<AppChannel>`.
@@ -151,7 +152,7 @@ A request without `Upgrade: websocket` gets `426`.
 ## Tests
 
 `pnpm test` runs inside workerd through `@cloudflare/vitest-plugin`. Each test gets isolated
-storage, so no cleanup is needed. `test/apply-migrations.ts` applies `migrations/` to the
+storage, so no cleanup is needed. `test/apply-migrations.ts` applies `drizzle/` to the
 test D1 database before the suite runs. Integration tests call the Worker through
 `exports.default.fetch`; only test setup touches `env.DB` directly.
 

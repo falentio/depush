@@ -1,7 +1,7 @@
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-plugin'
 import { defineConfig } from 'vitest/config'
 
-const migrations = await readD1Migrations('./migrations')
+const migrations = await readD1Migrations('./drizzle')
 
 export default defineConfig({
   plugins: [

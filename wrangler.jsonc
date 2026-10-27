@@ -14,7 +14,7 @@
       "binding": "DB",
       "database_name": "depush",
       "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
-      "migrations_dir": "migrations"
+      "migrations_dir": "drizzle"
     }
   ]
 }
