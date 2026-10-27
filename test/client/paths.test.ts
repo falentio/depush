@@ -31,6 +31,12 @@ describe('client paths', () => {
 
   it('rejects a client path outside the namespace', () => {
     expect(() => assertRouteNamespace(['/elsewhere'])).toThrow(/outside the \/console namespace/)
+    expect(() => assertRouteNamespace(['/consolex'])).toThrow(/outside the \/console namespace/)
+    expect(() => assertRouteNamespace(['/console-api'])).toThrow(/outside the \/console namespace/)
+  })
+
+  it('accepts the console namespace root', () => {
+    expect(() => assertRouteNamespace([paths.console])).not.toThrow()
   })
 
   it.each(WORKER_PREFIXES)('routes %s through the Worker', (prefix) => {

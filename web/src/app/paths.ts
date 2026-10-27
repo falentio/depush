@@ -59,7 +59,8 @@ export function assertRouteNamespace(clientPaths: readonly string[]): void {
     if (isWorkerPath(path)) {
       throw new Error(`Client path ${path} collides with a Worker route`)
     }
-    if (path !== paths.landing && !path.startsWith('/console')) {
+    const inConsoleNamespace = path === paths.console || path.startsWith(`${paths.console}/`)
+    if (path !== paths.landing && !inConsoleNamespace) {
       throw new Error(`Client path ${path} is outside the /console namespace`)
     }
   }
