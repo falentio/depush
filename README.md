@@ -644,9 +644,15 @@ Logs read the same stream:
 
 `LOG_LEVEL` sets the floor for the whole tree. It accepts `trace`, `debug`, `info`, `warning`,
 `error`, and `fatal`, and ships as `info`. At `info` you get every publish, every socket close,
-every refusal, and every unhandled error. Set `debug` for per-socket detail: subscribe and
-unsubscribe, cache replay, client events, and history queries. Set `warning` to keep refusals and
-errors only. Each isolate logs `ready` when it starts.
+every refusal in the signed publish and handshake paths, and every unhandled error. Set `debug`
+for per-socket detail: subscribe and unsubscribe, cache replay, client events, and history
+queries. Set `warning` to keep refusals and errors only. Each isolate logs `ready` when it starts.
+
+A refusal in the signed publish paths writes two records: the `request` line and a
+`request_refused` record that names the reason. A handshake refusal answers 101, so its `request`
+line is a debug record and only the `request_refused` record shows at `info`. A query route that
+answers 400 writes only the `request` line; read its reason from the response body. An unhandled
+error writes `unhandled` and the `request` line, both at error level.
 
 | Logger           | Records                                                                       |
 | ---------------- | ----------------------------------------------------------------------------- |
