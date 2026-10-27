@@ -1,6 +1,5 @@
 import { DurableObject } from 'cloudflare:workers'
-import type { CleanedWhere, CustomAdapter, Where } from '@better-auth/core/db/adapter'
-import { createAdapterFactory } from '@better-auth/core/db/adapter'
+import type { CleanedWhere, Where } from '@better-auth/core/db/adapter'
 
 export type AppRecord = {
   id: string
