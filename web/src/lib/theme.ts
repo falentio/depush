@@ -16,6 +16,17 @@ export function readStoredTheme(): Theme {
   }
 }
 
+export function nextTheme(theme: Theme): Theme {
+  switch (theme) {
+    case 'system':
+      return 'light'
+    case 'light':
+      return 'dark'
+    case 'dark':
+      return 'system'
+  }
+}
+
 export function resolveTheme(theme: Theme): 'light' | 'dark' {
   if (theme !== 'system') return theme
   return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
@@ -53,15 +64,11 @@ export function useTheme() {
     return () => media.removeEventListener('change', sync)
   }, [theme])
 
-  const setTheme = useCallback((next: Theme) => {
-    setThemeState(next)
-  }, [])
-
   const cycle = useCallback(() => {
-    const next: Theme = theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system'
-    setTheme(next)
+    const next = nextTheme(theme)
+    setThemeState(next)
     return next
-  }, [setTheme, theme])
+  }, [theme])
 
-  return { theme, setTheme, cycle }
+  return { theme, cycle }
 }
