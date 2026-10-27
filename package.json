@@ -15,16 +15,13 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "cf-typegen": "wrangler types",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate:local": "wrangler d1 migrations apply depush --local",
-    "db:migrate:remote": "wrangler d1 migrations apply depush --remote",
+    "compat": "node scripts/compat.mjs",
     "lint": "biome lint .",
     "format": "biome format --write .",
     "check": "biome check ."
   },
   "dependencies": {
-    "@hono/valibot-validator": "0.6.1",
-    "drizzle-orm": "^0.45.4",
+    "@noble/hashes": "^2.4.0",
     "hono": "^4.13.14",
     "valibot": "^1.5.0"
   },
@@ -32,7 +29,8 @@
     "@biomejs/biome": "^2.6.3",
     "@cloudflare/vite-plugin": "^1.65.0",
     "@cloudflare/vitest-plugin": "1.4.7",
-    "drizzle-kit": "^0.31.11",
+    "pusher": "^5.3.4",
+    "pusher-js": "^8.6.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
     "vitest": "^4.1.12",
