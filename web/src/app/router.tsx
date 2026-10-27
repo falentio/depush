@@ -16,7 +16,8 @@ import { AuthLayout } from '@/components/layout/auth-layout'
 import { ConsoleLayout } from '@/components/layout/console-layout'
 import { RootLayout } from '@/components/layout/root-layout'
 import { BootSplash, ErrorPanel, OfflineScreen, PageSkeleton } from '@/components/states'
-import { AppsPage } from '@/routes/apps'
+import { Button } from '@/components/ui/button'
+import { AppsPage, AppsSkeleton } from '@/routes/apps'
 import { ForbiddenPage } from '@/routes/forbidden'
 import { NotFoundPage } from '@/routes/not-found'
 import { SettingsPage } from '@/routes/settings'
@@ -83,7 +84,7 @@ const appsRoute = createRoute({
   beforeLoad: requireAccess('admin'),
   loader: ({ context }) => context.api.apps.list(),
   component: AppsPage,
-  pendingComponent: PageSkeleton,
+  pendingComponent: AppsSkeleton,
   errorComponent: RouteError,
 })
 
@@ -100,7 +101,10 @@ const settingsRoute = createRoute({
 const forbiddenRoute = createRoute({
   getParentRoute: () => consoleRoute,
   path: paths.forbidden,
-  beforeLoad: requireAccess('authenticated'),
+  beforeLoad: (args) => {
+    requireAccess('authenticated')(args)
+    if (args.context.auth.state === 'admin') throw redirect({ to: paths.apps })
+  },
   component: ForbiddenPage,
 })
 
@@ -152,9 +156,10 @@ function RouteError({ error, reset }: ErrorComponentProps) {
   if (apiError.kind === 'http' && apiError.status === 403) {
     return (
       <ErrorPanel error={apiError}>
-        <div className="mt-4 flex gap-3">
-          <button
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button
             type="button"
+            variant="outline"
             onClick={() => {
               void router.options.context.authStore
                 .refresh()
@@ -163,15 +168,16 @@ function RouteError({ error, reset }: ErrorComponentProps) {
             }}
           >
             Refresh role
-          </button>
-          <button
+          </Button>
+          <Button
             type="button"
+            variant="ghost"
             onClick={() => {
               void router.options.context.authStore.signOut()
             }}
           >
             Sign out
-          </button>
+          </Button>
         </div>
       </ErrorPanel>
     )
@@ -180,11 +186,13 @@ function RouteError({ error, reset }: ErrorComponentProps) {
   if (apiError.kind === 'http' && apiError.status === 401) {
     return (
       <ErrorPanel error={apiError}>
-        <p className="mt-4 text-sm">
-          <Link to={paths.signIn} search={{ redirect: paths.apps }} className="underline">
-            Sign in
-          </Link>
-        </p>
+        <div className="mt-4">
+          <Button asChild variant="outline">
+            <Link to={paths.signIn} search={{ redirect: paths.apps }}>
+              Sign in
+            </Link>
+          </Button>
+        </div>
       </ErrorPanel>
     )
   }

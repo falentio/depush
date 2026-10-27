@@ -9,10 +9,4 @@ export const WORKER_ROUTE_PREFIXES = WORKER_PREFIXES
  * the bare path, the globs cover everything below it, and the other prefixes
  * are API surfaces only below their root.
  */
-export const RUN_WORKER_FIRST = [
-  api,
-  `${api}/*`,
-  `${apps}/*`,
-  `${app}/*`,
-  healthz,
-] as const
+export const RUN_WORKER_FIRST = [api, `${api}/*`, `${apps}/*`, `${app}/*`, healthz] as const

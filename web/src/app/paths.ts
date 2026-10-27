@@ -47,9 +47,7 @@ export function guardedPath(pathname: string): typeof paths.apps | typeof paths.
 }
 
 export function isWorkerPath(pathname: string): boolean {
-  return WORKER_PREFIXES.some(
-    (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`),
-  )
+  return WORKER_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`))
 }
 
 /** Fails the build if a client path could shadow a Worker route. */

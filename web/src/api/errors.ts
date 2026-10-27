@@ -83,7 +83,8 @@ export function errorCopy(error: ApiError): ErrorCopy {
     case 403:
       return {
         title: 'Access denied',
-        description: error.message,
+        description:
+          error.message === 'Forbidden' ? 'Only an admin can manage apps.' : error.message,
         action: 'refresh-role',
       }
     case 404:
