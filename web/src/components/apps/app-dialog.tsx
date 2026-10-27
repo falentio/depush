@@ -124,14 +124,19 @@ export function AppDialog({
               <IssuedValue label="Key" value={issuedApp.key} />
               <IssuedValue label="Secret" value={issuedApp.secret} />
             </div>
-            <CopyButton
-              value={envBlock(issuedApp)}
-              label="Copy the .env block"
-              variant="outline"
-              size="sm"
-            >
-              Copy .env
-            </CopyButton>
+            <div>
+              <pre data-copy-value className="sr-only">
+                {envBlock(issuedApp)}
+              </pre>
+              <CopyButton
+                value={envBlock(issuedApp)}
+                label="Copy the .env block"
+                variant="outline"
+                size="sm"
+              >
+                Copy .env
+              </CopyButton>
+            </div>
             <DialogFooter>
               <Button type="button" className="w-full sm:w-auto" onClick={onClose}>
                 I&apos;ve saved it
