@@ -460,6 +460,12 @@ themselves out.
 | GET    | `/apps/:appId/channels/:channelName/history`  | signed request  | Per-channel history (depush extension) |
 | GET    | `/apps/:appId/channels/:channelName/presence` | signed request  | Live presence info (depush extension)  |
 
+Workers Assets serves the console. `run_worker_first` sends `/api`, `/api/*`, `/apps/*`, `/app/*`,
+and `/healthz` to the Worker, so those paths keep their JSON responses. The bare `/apps` path is not
+on that list. It returns the console shell as HTML with status 200 instead of the JSON 404 it
+returned before the console existed; use `/api/apps` for the app list, or `/apps/:appId/...` for a
+signed app route.
+
 Every `/apps` request carries the auth parameters the official SDK adds: `auth_key`,
 `auth_timestamp`, `auth_version=1.0`, and `auth_signature`. A request with a non-empty body also
 carries `body_md5`. The timestamp is a whole number of seconds, all digits, within 600 seconds of
