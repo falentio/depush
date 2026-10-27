@@ -27,6 +27,8 @@ export function NotFoundPage() {
               <Link to={paths.signIn} search={{ redirect: paths.apps }}>
                 Go to sign in
               </Link>
+            ) : auth.state === 'user' ? (
+              <Link to={paths.forbidden}>Go to console</Link>
             ) : (
               <Link to={paths.apps}>Go to apps</Link>
             )}
