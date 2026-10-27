@@ -2,6 +2,7 @@ import type { Context, MiddlewareHandler } from 'hono'
 import { Hono } from 'hono'
 import * as v from 'valibot'
 import type { AppBindings } from './env'
+import { log } from './logging'
 import type { Registry } from './registry'
 import { publicApp, registryStub } from './registry'
 import { createAuth } from './session'
@@ -44,7 +45,9 @@ adminRoutes.patch(
     if (body === null) return c.json({ error: 'Invalid JSON body' }, 400)
     const parsed = v.safeParse(settingsSchema, body)
     if (!parsed.success) return c.json({ error: 'signup_enabled must be a boolean' }, 400)
-    return c.json(await c.var.registry.updateSettings(parsed.output))
+    const updated = await c.var.registry.updateSettings(parsed.output)
+    log.admin.info('settings_updated', { signupEnabled: parsed.output.signup_enabled })
+    return c.json(updated)
   }),
 )
 
@@ -60,6 +63,7 @@ adminRoutes.post(
 
     const created = await c.var.registry.createApp(parsed.output.name)
     if (created === null) return c.json({ error: 'Could not allocate an app id' }, 500)
+    log.admin.info('app_created', { appId: created.id, appName: created.name })
     return c.json(created, 201)
   }),
 )
@@ -74,6 +78,7 @@ adminRoutes.patch(
 
     const updated = await c.var.registry.updateApp(c.req.param('appId') ?? '', parsed.output.name)
     if (updated === null) return c.json({ error: 'App not found' }, 404)
+    log.admin.info('app_updated', { appId: updated.id, appName: updated.name })
     return c.json(updated)
   }),
 )
@@ -90,8 +95,10 @@ adminRoutes.get(
 adminRoutes.delete(
   '/apps/:appId',
   ...adminOnly(async (c) => {
-    const deleted = await c.var.registry.deleteApp(c.req.param('appId') ?? '')
+    const appId = c.req.param('appId') ?? ''
+    const deleted = await c.var.registry.deleteApp(appId)
     if (!deleted) return c.json({ error: 'App not found' }, 404)
+    log.admin.info('app_deleted', { appId })
     return c.body(null, 204)
   }),
 )
@@ -107,8 +114,14 @@ function adminOnly(
     async (c, next) => {
       const auth = createAuth(c.var.registry, c.env, c.req.raw)
       const session = await auth.api.getSession({ headers: c.req.raw.headers })
-      if (session === null) return c.json({ error: 'Unauthorized' }, 401)
-      if (session.user.role !== 'admin') return c.json({ error: 'Forbidden' }, 403)
+      if (session === null) {
+        log.admin.debug('denied', { path: c.req.path, status: 401 })
+        return c.json({ error: 'Unauthorized' }, 401)
+      }
+      if (session.user.role !== 'admin') {
+        log.admin.warn('denied', { path: c.req.path, userId: session.user.id, status: 403 })
+        return c.json({ error: 'Forbidden' }, 403)
+      }
       await next()
     },
     async (c) => handler(c),
