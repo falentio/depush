@@ -516,6 +516,7 @@ pnpm check                              # Biome lint and format check
 pnpm typecheck                          # tsc --noEmit
 pnpm test                               # Vitest in workerd
 pnpm test:compat                        # Node Vitest suite for the official pusher server SDK
+pnpm fuzz                               # Seeded HTTP and WebSocket fuzz run against a local server
 pnpm build                              # Vite build
 pnpm exec wrangler deploy --dry-run     # Check the deploy bundle and bindings
 pnpm compat                             # Run the official SDKs against a local server
@@ -532,6 +533,25 @@ the next free port unless `PUSHER_COMPAT_PORT` is set. To compare the same signe
 against Pusher Cloud, export `PUSHER_CLOUD_APP_ID`, `PUSHER_CLOUD_APP_KEY`, and
 `PUSHER_CLOUD_APP_SECRET`; the cloud block is skipped when any is missing. The suite reads those
 variables from the environment and never writes them to a file. Do not commit them.
+
+`pnpm fuzz` starts its own dev server with test credentials, so it sends no requests to Pusher
+Cloud and needs no auth server. It drives the Worker over HTTP and WebSocket with cases generated
+from one seed. It reports a finding and exits 1 on a 5xx response, a non-JSON response from
+`/apps` or `/healthz`, a timeout, an unexpected WebSocket close, or a server exit. The allowed
+WebSocket closes are 1000, 4001, 4005, 4007, 4008, and 4009. It backs up `.dev.vars` to
+`.dev.vars.fuzz-backup`, writes the test values, and restores the file when the run ends,
+including on Ctrl-C and SIGTERM.
+
+```sh
+FUZZ_SEED=123456789 pnpm fuzz           # Reproduce a case from a printed seed
+FUZZ_ITERATIONS=500 pnpm fuzz           # More cases, default 200
+PUSHER_FUZZ_PORT=8800 pnpm fuzz         # Fixed port, default is the first free port from 8793
+```
+
+`FUZZ_SEED` is an unsigned 32-bit integer. `FUZZ_ITERATIONS` is a positive integer. Both are
+printed at the start. A failure prints the seed, iteration, surface, request or frames, observed
+status or close code, a short body, and the tail of the server log. Rerun the same seed and
+iteration count to reproduce it. The fuzzer only runs against the local server bound to 127.0.0.1.
 
 Run `pnpm cf-typegen` after you change `wrangler.jsonc`, then commit the regenerated
 `worker-configuration.d.ts`.
