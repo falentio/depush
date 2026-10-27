@@ -3,10 +3,9 @@
   "name": "depush",
   "main": "./src/index.ts",
   "compatibility_date": "2026-10-26",
-  "compatibility_flags": ["nodejs_compat"],
   "observability": { "enabled": true },
   "durable_objects": {
     "bindings": [{ "name": "APP_HUB", "class_name": "AppHub" }]
   },
-  "migrations": [{ "tag": "v1", "new_classes": ["AppHub"] }]
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["AppHub"] }]
 }
