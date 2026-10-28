@@ -494,6 +494,7 @@ export class AppHub extends DurableObject<AppBindings> {
     }
 
     this.config = appConfig(app, readSettings(this.env))
+    this.log.info('config_loaded', { sockets: this.ctx.getWebSockets().length })
     return this.config
   }
 

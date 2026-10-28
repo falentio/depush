@@ -1,6 +1,6 @@
 import { evictDurableObject } from 'cloudflare:test'
 import { env, exports } from 'cloudflare:workers'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { hmacHex, md5Hex, signingString } from '../src/signature'
 
 const ORIGIN = 'http://depush.test'
@@ -120,6 +120,13 @@ async function signedGet(app: App, path: string): Promise<Response> {
   return exports.default.fetch(`${ORIGIN}${path}?${params}`)
 }
 
+function loggedMessages(calls: unknown[][]): string[] {
+  return calls.map((call) => {
+    const record = JSON.parse(String(call[0])) as { message: string }
+    return record.message
+  })
+}
+
 async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (!predicate()) {
@@ -129,6 +136,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 10_000): Promise<vo
 }
 
 describe('the hub across a Durable Object hibernation', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
   it('keeps an open socket and its public subscription', async () => {
     const app = await createApp('hibernation-public')
     const client = await connect(app)
@@ -280,6 +291,7 @@ describe('the hub across a Durable Object hibernation', () => {
   it('closes the socket when the app no longer exists', async () => {
     const app = await createApp('hibernation-deleted-app')
     const client = await connect(app)
+    const warn = vi.spyOn(console, 'warn')
 
     await env.REGISTRY.get(env.REGISTRY.idFromName('registry')).deleteApp(app.id)
     await evictHub(app)
@@ -288,6 +300,8 @@ describe('the hub across a Durable Object hibernation', () => {
     await waitFor(() => error(client) !== null)
 
     expect(error(client)?.code).toBe(4001)
+    expect(loggedMessages(warn.mock.calls)).toContain('config_missing')
+    expect(loggedMessages(warn.mock.calls)).toContain('subscribe_refused')
   })
 
   it('delivers a client event between sockets that hibernated', async () => {
