@@ -648,6 +648,11 @@ every refusal in the signed publish and handshake paths, and every unhandled err
 for per-socket detail: subscribe and unsubscribe, cache replay, client events, and history
 queries. Set `warning` to keep refusals and errors only. Each isolate logs `ready` when it starts.
 
+A hub writes `config_loaded` the first time it needs the app record, and the `sockets` field
+carries the live socket count at that moment. A count above zero marks a hub that woke from
+hibernation with connections still attached. `config_missing` reports a read that found no app
+record, and the socket that needed it closes with 4001.
+
 A refusal in the signed publish paths writes two records: the `request` line and a
 `request_refused` record that names the reason. A handshake refusal answers 101, so its `request`
 line is a debug record and only the `request_refused` record shows at `info`. A query route that
@@ -658,7 +663,7 @@ error writes `unhandled` and the `request` line, both at error level.
 | ---------------- | ----------------------------------------------------------------------------- |
 | `depush.request` | the request line, HTTP-edge refusals, unhandled errors                        |
 | `depush.admin`   | app create, update, and delete, the signup gate, admin denials                |
-| `depush.hub`     | socket open and close, subscribe outcomes, publishes, client events, presence |
+| `depush.hub`     | socket open and close, subscribe outcomes, publishes, client events, presence, config load and miss |
 | `depush.channel` | event recording and history queries                                           |
 
 Records never carry secrets, signatures, cookies, event data, or `user_info`. A publish record
@@ -736,7 +741,7 @@ Worker (src/index.ts) [1]
 ├── GET /app/:key?protocol=7 [1b]
 │   ├── Registry.appByKey [1b0] → 4001 when there is no such app
 │   ├── handshake check [1b1] → 4007, 4008 before the hub
-│   └── AppHub.init(config) then AppHub.fetch [1b2]
+│   └── AppHub.fetch, config from Registry on first need [1b2]
 │       ├── ctx.acceptWebSocket [1b2a]
 │       ├── serializeAttachment({ socketId, subscriptions }) [1b2b]
 │       ├── webSocketMessage [1b2c] → parseFrame: subscribe, unsubscribe, ping, client event
