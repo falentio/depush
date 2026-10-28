@@ -39,6 +39,11 @@ const PUSHER_ERROR_NO_APP = 4001
 export const CLIENT_EVENT_LIMIT = 10
 export const CLIENT_EVENT_WINDOW_MS = 1000
 
+/** The runtime reports 1005 when a client closes without a code, and 1005 cannot be sent back. */
+function outboundCloseCode(code: number): number {
+  return code === 1000 || (code >= 3000 && code <= 4999) ? code : 1000
+}
+
 export type Subscription = {
   channel: string
   presence?: PresenceMember | undefined
@@ -260,22 +265,24 @@ export class AppHub extends DurableObject<AppBindings> {
 
   override webSocketClose(socket: WebSocket, code: number, reason: string): void {
     const state = readSocketState(socket)
-    if (state === null) return
+    if (state !== null) {
+      this.clientLimiter.clear(state.socketId)
 
-    this.clientLimiter.clear(state.socketId)
+      for (const subscription of state.subscriptions) {
+        if (subscription.presence === undefined) continue
+        this.leavePresence(subscription.channel, subscription.presence.userId, state.socketId)
+      }
 
-    for (const subscription of state.subscriptions) {
-      if (subscription.presence === undefined) continue
-      this.leavePresence(subscription.channel, subscription.presence.userId, state.socketId)
+      this.log.info('socket_closed', {
+        socketId: state.socketId,
+        closeCode: code,
+        closeReason: reason,
+        subscriptions: state.subscriptions.length,
+        ...(state.connectedAt === undefined ? {} : { socketMs: Date.now() - state.connectedAt }),
+      })
     }
 
-    this.log.info('socket_closed', {
-      socketId: state.socketId,
-      closeCode: code,
-      closeReason: reason,
-      subscriptions: state.subscriptions.length,
-      ...(state.connectedAt === undefined ? {} : { socketMs: Date.now() - state.connectedAt }),
-    })
+    socket.close(outboundCloseCode(code), reason)
   }
 
   override webSocketError(socket: WebSocket): void {
