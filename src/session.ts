@@ -3,6 +3,7 @@ import { createAdapterFactory } from '@better-auth/core/db/adapter'
 import { APIError } from 'better-auth/api'
 import { betterAuth } from 'better-auth/minimal'
 import type { AppBindings } from './env'
+import { log } from './logging'
 import type { AuthQuery, AuthQueryResult, Registry } from './registry'
 
 export type RegistryStub = DurableObjectStub<Registry>
@@ -33,6 +34,7 @@ export function createAuth(registry: RegistryStub, env: AppBindings, request: Re
         create: {
           before: async () => {
             if (!(await registry.signUpAllowed())) {
+              log.admin.info('signup_refused')
               throw new APIError('FORBIDDEN', { message: 'Sign-up is disabled' })
             }
           },

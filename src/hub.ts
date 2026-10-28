@@ -1,12 +1,14 @@
 import { DurableObject } from 'cloudflare:workers'
+import type { Logger } from '@logtape/logtape'
 import * as v from 'valibot'
 import { verifyChannelAuth } from './auth'
-import type { Channel } from './channel'
+import { type Channel, channelObjectName } from './channel'
 import type { AppConfig } from './config'
 import { readSettings } from './config'
 import type { AppBindings } from './env'
 import type { ChannelSnapshot } from './events'
 import { dataBytes, MAX_DATA_BYTES } from './events'
+import { log } from './logging'
 import type { ClientFrame, PresenceMember, PresenceState } from './protocol'
 import {
   cacheMiss,
@@ -42,6 +44,7 @@ export type Subscription = {
 
 export type SocketState = {
   socketId: string
+  connectedAt?: number | undefined
   subscriptions: Subscription[]
 }
 
@@ -95,12 +98,43 @@ const subscriptionSchema = v.object({
 
 const socketStateSchema = v.object({
   socketId: v.string(),
+  connectedAt: v.optional(v.number()),
   subscriptions: v.array(subscriptionSchema),
 })
+
+const SUBSCRIBE_REFUSALS = {
+  encrypted_channel: {
+    message: 'Encrypted channels are not supported',
+    code: PUSHER_ERROR_AUTH_REQUIRED,
+  },
+  hub_not_initialized: {
+    message: 'AppHub is not initialized',
+    code: PUSHER_ERROR_AUTH_REQUIRED,
+  },
+  invalid_auth: {
+    message: 'Invalid channel authorization',
+    code: PUSHER_ERROR_AUTH_REQUIRED,
+  },
+} as const
+
+const CLIENT_EVENT_REFUSALS = {
+  not_subscribed: {
+    message: 'Client events require a private or presence channel subscription',
+    code: PUSHER_ERROR_BAD_MESSAGE,
+  },
+  data_too_large: { message: 'Event data exceeds 10KB', code: PUSHER_ERROR_BAD_MESSAGE },
+  rate_limited: { message: 'Client event rate limit exceeded', code: PUSHER_ERROR_RATE_LIMIT },
+} as const
 
 export class AppHub extends DurableObject<AppBindings> {
   private config: AppConfig | null = null
   private readonly clientLimiter = new ClientEventLimiter()
+  private readonly log: Logger
+
+  constructor(ctx: DurableObjectState, env: AppBindings) {
+    super(ctx, env)
+    this.log = log.hub.with({ appId: this.ctx.id.name ?? 'unknown' })
+  }
 
   /**
    * Only the WebSocket upgrade needs the key and secret, so the Worker hands
@@ -116,15 +150,23 @@ export class AppHub extends DurableObject<AppBindings> {
     }
 
     const config = this.config
-    if (config === null) return new Response('AppHub is not initialized', { status: 503 })
+    if (config === null) {
+      this.log.warn('hub_not_initialized', { status: 503 })
+      return new Response('AppHub is not initialized', { status: 503 })
+    }
 
     const pair = new WebSocketPair()
     const server = pair[1]
     this.ctx.acceptWebSocket(server)
 
-    const state: SocketState = { socketId: newSocketId(), subscriptions: [] }
+    const state: SocketState = {
+      socketId: newSocketId(),
+      connectedAt: Date.now(),
+      subscriptions: [],
+    }
     server.serializeAttachment(state)
     server.send(connectionEstablished(state.socketId, config.activityTimeout))
+    this.log.debug('socket_opened', { socketId: state.socketId })
 
     return new Response(null, { status: 101, webSocket: pair[0] })
   }
@@ -139,17 +181,34 @@ export class AppHub extends DurableObject<AppBindings> {
       })
     }
 
+    const delivered = new Map<string, { subscribers: number; failed: number }>()
+
     for (const socket of this.ctx.getWebSockets()) {
       const state = readSocketState(socket)
-      if (state === null) continue
+      if (state === null) {
+        this.log.warn('socket_state_unreadable')
+        continue
+      }
       if (state.socketId === input.exceptSocketId) continue
 
       for (const channel of input.channels) {
         if (!isSubscribed(state, channel)) continue
-        try {
-          socket.send(channelEvent(input.name, channel, input.data))
-        } catch {}
+        const tally = delivered.get(channel) ?? { subscribers: 0, failed: 0 }
+        tally.subscribers += 1
+        if (!this.deliver(socket, channelEvent(input.name, channel, input.data))) tally.failed += 1
+        delivered.set(channel, tally)
       }
+    }
+
+    for (const channel of new Set(input.channels)) {
+      const tally = delivered.get(channel) ?? { subscribers: 0, failed: 0 }
+      this.log.info('publish', {
+        channel,
+        event: input.name,
+        subscribers: tally.subscribers,
+        failed: tally.failed,
+        cached: input.cache && isCacheChannel(channel),
+      })
     }
   }
 
@@ -164,41 +223,51 @@ export class AppHub extends DurableObject<AppBindings> {
   }
 
   override async webSocketMessage(socket: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    if (typeof message !== 'string') {
-      socket.send(errorFrame('Binary frames are not supported', PUSHER_ERROR_BAD_MESSAGE))
-      return
-    }
+    const socketId = readSocketState(socket)?.socketId
 
-    if (isOversizedFrame(message)) {
-      socket.send(errorFrame('Message exceeds 64KB', PUSHER_ERROR_BAD_MESSAGE))
-      return
-    }
+    try {
+      if (typeof message !== 'string') {
+        this.log.warn('frame_refused', { socketId, reason: 'binary_frame' })
+        socket.send(errorFrame('Binary frames are not supported', PUSHER_ERROR_BAD_MESSAGE))
+        return
+      }
 
-    const parsed = parseFrame(message)
-    if (!parsed.ok) {
-      socket.send(errorFrame('Invalid message', PUSHER_ERROR_BAD_MESSAGE))
-      return
-    }
+      if (isOversizedFrame(message)) {
+        this.log.warn('frame_refused', { socketId, reason: 'oversized_frame' })
+        socket.send(errorFrame('Message exceeds 64KB', PUSHER_ERROR_BAD_MESSAGE))
+        return
+      }
 
-    switch (parsed.frame.kind) {
-      case 'ping':
-        socket.send(pong())
+      const parsed = parseFrame(message)
+      if (!parsed.ok) {
+        this.log.warn('frame_refused', { socketId, reason: 'malformed_frame' })
+        socket.send(errorFrame('Invalid message', PUSHER_ERROR_BAD_MESSAGE))
         return
-      case 'pong':
-        return
-      case 'subscribe':
-        await this.subscribe(socket, parsed.frame)
-        return
-      case 'unsubscribe':
-        this.unsubscribe(socket, parsed.frame.channel)
-        return
-      case 'client':
-        await this.clientEvent(socket, parsed.frame)
-        return
+      }
+
+      switch (parsed.frame.kind) {
+        case 'ping':
+          socket.send(pong())
+          return
+        case 'pong':
+          return
+        case 'subscribe':
+          await this.subscribe(socket, parsed.frame)
+          return
+        case 'unsubscribe':
+          this.unsubscribe(socket, parsed.frame.channel)
+          return
+        case 'client':
+          await this.clientEvent(socket, parsed.frame)
+          return
+      }
+    } catch (error) {
+      this.log.error('unhandled', { socketId, error })
+      throw error
     }
   }
 
-  override webSocketClose(socket: WebSocket): void {
+  override webSocketClose(socket: WebSocket, code: number, reason: string): void {
     const state = readSocketState(socket)
     if (state === null) return
 
@@ -208,9 +277,18 @@ export class AppHub extends DurableObject<AppBindings> {
       if (subscription.presence === undefined) continue
       this.leavePresence(subscription.channel, subscription.presence.userId, state.socketId)
     }
+
+    this.log.info('socket_closed', {
+      socketId: state.socketId,
+      closeCode: code,
+      closeReason: reason,
+      subscriptions: state.subscriptions.length,
+      ...(state.connectedAt === undefined ? {} : { socketMs: Date.now() - state.connectedAt }),
+    })
   }
 
   override webSocketError(socket: WebSocket): void {
+    this.log.warn('socket_error', { socketId: readSocketState(socket)?.socketId })
     socket.close(1011, 'WebSocket error')
   }
 
@@ -220,7 +298,7 @@ export class AppHub extends DurableObject<AppBindings> {
 
     const kind = channelKind(frame.channel)
     if (kind === 'encrypted') {
-      this.fail(socket, 'Encrypted channels are not supported', PUSHER_ERROR_AUTH_REQUIRED)
+      this.subscribeRefused(socket, current.socketId, frame.channel, 'encrypted_channel')
       return
     }
 
@@ -228,7 +306,7 @@ export class AppHub extends DurableObject<AppBindings> {
     if (kind !== 'public') {
       const config = this.config
       if (config === null) {
-        this.fail(socket, 'AppHub is not initialized', PUSHER_ERROR_AUTH_REQUIRED)
+        this.subscribeRefused(socket, current.socketId, frame.channel, 'hub_not_initialized')
         return
       }
       const auth = await verifyChannelAuth(
@@ -241,7 +319,7 @@ export class AppHub extends DurableObject<AppBindings> {
         config,
       )
       if (!auth.ok) {
-        this.fail(socket, 'Invalid channel authorization', PUSHER_ERROR_AUTH_REQUIRED)
+        this.subscribeRefused(socket, current.socketId, frame.channel, 'invalid_auth')
         return
       }
       presence = auth.presence
@@ -268,11 +346,17 @@ export class AppHub extends DurableObject<AppBindings> {
       ...state,
       subscriptions: [...state.subscriptions, subscription],
     })
+    this.log.debug('subscribed', { socketId: state.socketId, channel: frame.channel })
 
     socket.send(this.subscriptionFrame(frame.channel, presence))
     await this.deliverCache(socket, frame.channel)
 
     if (presence !== null && !alreadyPresent) {
+      this.log.debug('presence_member', {
+        channel: frame.channel,
+        userId: presence.userId,
+        change: 'added',
+      })
       this.sendToChannel(frame.channel, memberAdded(frame.channel, presence), state.socketId)
     }
   }
@@ -288,6 +372,7 @@ export class AppHub extends DurableObject<AppBindings> {
       ...state,
       subscriptions: state.subscriptions.filter((entry) => entry.channel !== channel),
     })
+    this.log.debug('unsubscribed', { socketId: state.socketId, channel })
 
     if (subscription.presence !== undefined) {
       this.leavePresence(channel, subscription.presence.userId, state.socketId)
@@ -301,22 +386,17 @@ export class AppHub extends DurableObject<AppBindings> {
     const kind = channelKind(frame.channel)
     const subscription = state.subscriptions.find((entry) => entry.channel === frame.channel)
     if (subscription === undefined || (kind !== 'private' && kind !== 'presence')) {
-      socket.send(
-        errorFrame(
-          'Client events require a private or presence channel subscription',
-          PUSHER_ERROR_BAD_MESSAGE,
-        ),
-      )
+      this.clientEventRefused(socket, state.socketId, frame.channel, 'not_subscribed')
       return
     }
 
     if (dataBytes(frame.data) > MAX_DATA_BYTES) {
-      socket.send(errorFrame('Event data exceeds 10KB', PUSHER_ERROR_BAD_MESSAGE))
+      this.clientEventRefused(socket, state.socketId, frame.channel, 'data_too_large')
       return
     }
 
     if (!this.clientLimiter.allow(state.socketId, Date.now())) {
-      socket.send(errorFrame('Client event rate limit exceeded', PUSHER_ERROR_RATE_LIMIT))
+      this.clientEventRefused(socket, state.socketId, frame.channel, 'rate_limited')
       return
     }
 
@@ -327,7 +407,7 @@ export class AppHub extends DurableObject<AppBindings> {
       cache: false,
     })
 
-    this.sendToChannel(
+    const fanOut = this.sendToChannel(
       frame.channel,
       clientEventFrame({
         name: frame.name,
@@ -337,6 +417,13 @@ export class AppHub extends DurableObject<AppBindings> {
       }),
       state.socketId,
     )
+    this.log.debug('client_event', {
+      socketId: state.socketId,
+      channel: frame.channel,
+      event: frame.name,
+      subscribers: fanOut.subscribers,
+      failed: fanOut.failed,
+    })
   }
 
   private leavePresence(channel: string, userId: string, socketId: string): void {
@@ -344,6 +431,7 @@ export class AppHub extends DurableObject<AppBindings> {
     if (remaining.some((member) => member.userId === userId)) return
 
     this.sendToChannel(channel, memberRemoved(channel, userId), socketId)
+    this.log.debug('presence_member', { channel, userId, change: 'removed' })
   }
 
   private subscriptionFrame(channel: string, presence: PresenceMember | null): string {
@@ -364,22 +452,39 @@ export class AppHub extends DurableObject<AppBindings> {
     return states
   }
 
-  private sendToChannel(channel: string, frame: string, exceptSocketId: string | undefined): void {
+  private sendToChannel(
+    channel: string,
+    frame: string,
+    exceptSocketId: string | undefined,
+  ): { subscribers: number; failed: number } {
+    let subscribers = 0
+    let failed = 0
+
     for (const socket of this.ctx.getWebSockets()) {
       const state = readSocketState(socket)
       if (state === null) continue
       if (state.socketId === exceptSocketId) continue
       if (!isSubscribed(state, channel)) continue
-      try {
-        socket.send(frame)
-      } catch {}
+      subscribers += 1
+      if (!this.deliver(socket, frame)) failed += 1
+    }
+
+    return { subscribers, failed }
+  }
+
+  private deliver(socket: WebSocket, frame: string): boolean {
+    try {
+      socket.send(frame)
+      return true
+    } catch {
+      return false
     }
   }
 
   private channelState(channel: string): DurableObjectStub<Channel> {
     const appId = this.ctx.id.name
     if (appId === undefined) throw new Error('AppHub is not addressed by app id')
-    return this.env.CHANNEL.get(this.env.CHANNEL.idFromName(`${appId}:${channel}`))
+    return this.env.CHANNEL.get(this.env.CHANNEL.idFromName(channelObjectName(appId, channel)))
   }
 
   private async recordEvent(channel: string, input: RecordedEvent): Promise<void> {
@@ -396,9 +501,32 @@ export class AppHub extends DurableObject<AppBindings> {
     if (!isCacheChannel(channel)) return
 
     const cached = await this.channelState(channel).snapshot()
+    this.log.debug('cache_replay', { channel, cached: cached !== null })
     socket.send(
       cached === null ? cacheMiss(channel) : channelEvent(cached.name, channel, cached.data),
     )
+  }
+
+  private subscribeRefused(
+    socket: WebSocket,
+    socketId: string,
+    channel: string,
+    reason: keyof typeof SUBSCRIBE_REFUSALS,
+  ): void {
+    const refusal = SUBSCRIBE_REFUSALS[reason]
+    this.log.warn('subscribe_refused', { socketId, channel, reason, code: refusal.code })
+    this.fail(socket, refusal.message, refusal.code)
+  }
+
+  private clientEventRefused(
+    socket: WebSocket,
+    socketId: string,
+    channel: string,
+    reason: keyof typeof CLIENT_EVENT_REFUSALS,
+  ): void {
+    const refusal = CLIENT_EVENT_REFUSALS[reason]
+    this.log.warn('client_event_refused', { socketId, channel, reason, code: refusal.code })
+    socket.send(errorFrame(refusal.message, refusal.code))
   }
 
   private fail(socket: WebSocket, message: string, code: number): void {

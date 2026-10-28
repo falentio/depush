@@ -620,6 +620,50 @@ Run `wrangler tail` to watch requests and logs:
 pnpm exec wrangler tail
 ```
 
+### Logging
+
+The Worker writes one JSON Lines record per event to the console, so `wrangler tail` and Workers
+Logs read the same stream:
+
+```json
+{
+  "@timestamp": "2026-10-27T18:52:33.872Z",
+  "level": "INFO",
+  "message": "publish",
+  "logger": "depush.hub",
+  "properties": {
+    "appId": "lpcvfau7",
+    "channel": "cache-news",
+    "event": "greeting",
+    "subscribers": 1,
+    "failed": 0,
+    "cached": true
+  }
+}
+```
+
+`LOG_LEVEL` sets the floor for the whole tree. It accepts `trace`, `debug`, `info`, `warning`,
+`error`, and `fatal`, and ships as `info`. At `info` you get every publish, every socket close,
+every refusal in the signed publish and handshake paths, and every unhandled error. Set `debug`
+for per-socket detail: subscribe and unsubscribe, cache replay, client events, and history
+queries. Set `warning` to keep refusals and errors only. Each isolate logs `ready` when it starts.
+
+A refusal in the signed publish paths writes two records: the `request` line and a
+`request_refused` record that names the reason. A handshake refusal answers 101, so its `request`
+line is a debug record and only the `request_refused` record shows at `info`. A query route that
+answers 400 writes only the `request` line; read its reason from the response body. An unhandled
+error writes `unhandled` and the `request` line, both at error level.
+
+| Logger           | Records                                                                       |
+| ---------------- | ----------------------------------------------------------------------------- |
+| `depush.request` | the request line, HTTP-edge refusals, unhandled errors                        |
+| `depush.admin`   | app create, update, and delete, the signup gate, admin denials                |
+| `depush.hub`     | socket open and close, subscribe outcomes, publishes, client events, presence |
+| `depush.channel` | event recording and history queries                                           |
+
+Records never carry secrets, signatures, cookies, event data, or `user_info`. A publish record
+reports `subscribers` and `failed`, so a delivery problem shows without the payload.
+
 `/healthz` answers from the Worker and does not touch the Durable Object, so it proves the Worker
 is up, not that a hub is reachable.
 

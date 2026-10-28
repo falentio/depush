@@ -1,6 +1,7 @@
 import { DurableObject } from 'cloudflare:workers'
 import type { AppBindings } from './env'
 import type { HistoryEvent, HistoryPage, HistoryQuery } from './events'
+import { log } from './logging'
 
 export type CachedEvent = { name: string; data: string }
 export type CachedEventInfo = { data: string; ttl: number }
@@ -49,7 +50,22 @@ CREATE TABLE IF NOT EXISTS events (
 )
 `
 
+export function channelObjectName(appId: string, channel: string): string {
+  return `${appId}:${channel}`
+}
+
+export function channelScope(objectName: string | undefined): { appId: string; channel: string } {
+  const [appId = 'unknown', ...rest] = (objectName ?? '').split(':')
+  const channel = rest.join(':')
+  return {
+    appId: appId === '' ? 'unknown' : appId,
+    channel: channel === '' ? 'unknown' : channel,
+  }
+}
+
 export class Channel extends DurableObject<AppBindings> {
+  private readonly log = log.channel.with(channelScope(this.ctx.id.name))
+
   constructor(ctx: DurableObjectState, env: AppBindings) {
     super(ctx, env)
     ctx.blockConcurrencyWhile(async () => {
@@ -69,15 +85,17 @@ export class Channel extends DurableObject<AppBindings> {
     )
     this.prune(now)
 
-    if (!input.cache) return
-
-    this.ctx.storage.sql.exec(
-      `INSERT INTO cache (id, event_name, data, expires_at) VALUES (1, ?, ?, ?)
+    if (input.cache) {
+      this.ctx.storage.sql.exec(
+        `INSERT INTO cache (id, event_name, data, expires_at) VALUES (1, ?, ?, ?)
        ON CONFLICT(id) DO UPDATE SET event_name = excluded.event_name, data = excluded.data, expires_at = excluded.expires_at`,
-      input.name,
-      input.data,
-      now + input.ttlSeconds * 1000,
-    )
+        input.name,
+        input.data,
+        now + input.ttlSeconds * 1000,
+      )
+    }
+
+    this.log.debug('recorded', { event: input.name, cached: input.cache })
   }
 
   async history(input: HistoryQuery): Promise<HistoryPage> {
@@ -91,8 +109,10 @@ export class Channel extends DurableObject<AppBindings> {
 
     const page = rows.slice(0, input.limit)
     const oldest = page.at(-1)
+    const events = page.map(historyEvent)
+    this.log.debug('history', { limit: input.limit, returned: events.length })
     return {
-      events: page.map(historyEvent),
+      events,
       next_cursor: rows.length > input.limit && oldest !== undefined ? String(oldest.id) : null,
     }
   }
