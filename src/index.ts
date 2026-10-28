@@ -94,9 +94,7 @@ app.get('/app/:key', async (c) => {
     return upgradeRejected(c.req.raw, rejection.code, rejection.message)
   }
 
-  const config = appConfig(found, readSettings(c.env))
-  const hub = c.env.APP_HUB.get(c.env.APP_HUB.idFromName(config.appId))
-  await hub.init(config)
+  const hub = c.env.APP_HUB.get(c.env.APP_HUB.idFromName(found.id))
   return hub.fetch(c.req.raw)
 })
 

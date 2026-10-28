@@ -4,11 +4,12 @@ import * as v from 'valibot'
 import { verifyChannelAuth } from './auth'
 import { type Channel, channelObjectName } from './channel'
 import type { AppConfig } from './config'
-import { readSettings } from './config'
+import { appConfig, readSettings } from './config'
 import type { AppBindings } from './env'
 import type { ChannelSnapshot } from './events'
 import { dataBytes, MAX_DATA_BYTES } from './events'
 import { log } from './logging'
+import { registryStub } from './registry'
 import type { ClientFrame, PresenceMember, PresenceState } from './protocol'
 import {
   cacheMiss,
@@ -33,6 +34,7 @@ import {
 const PUSHER_ERROR_BAD_MESSAGE = 4300
 const PUSHER_ERROR_RATE_LIMIT = 4301
 const PUSHER_ERROR_AUTH_REQUIRED = 4009
+const PUSHER_ERROR_NO_APP = 4001
 
 export const CLIENT_EVENT_LIMIT = 10
 export const CLIENT_EVENT_WINDOW_MS = 1000
@@ -107,9 +109,9 @@ const SUBSCRIBE_REFUSALS = {
     message: 'Encrypted channels are not supported',
     code: PUSHER_ERROR_AUTH_REQUIRED,
   },
-  hub_not_initialized: {
-    message: 'AppHub is not initialized',
-    code: PUSHER_ERROR_AUTH_REQUIRED,
+  app_not_found: {
+    message: 'Application does not exist',
+    code: PUSHER_ERROR_NO_APP,
   },
   invalid_auth: {
     message: 'Invalid channel authorization',
@@ -136,24 +138,13 @@ export class AppHub extends DurableObject<AppBindings> {
     this.log = log.hub.with({ appId: this.ctx.id.name ?? 'unknown' })
   }
 
-  /**
-   * Only the WebSocket upgrade needs the key and secret, so the Worker hands
-   * the resolved config in there. Publish and query calls never touch it.
-   */
-  init(config: AppConfig): void {
-    this.config = config
-  }
-
   override async fetch(request: Request): Promise<Response> {
     if (!isWebSocketUpgrade(request)) {
       return new Response('Expected WebSocket upgrade', { status: 426 })
     }
 
-    const config = this.config
-    if (config === null) {
-      this.log.warn('hub_not_initialized', { status: 503 })
-      return new Response('AppHub is not initialized', { status: 503 })
-    }
+    const config = await this.resolveConfig()
+    if (config === null) return new Response('Application does not exist', { status: 404 })
 
     const pair = new WebSocketPair()
     const server = pair[1]
@@ -304,9 +295,9 @@ export class AppHub extends DurableObject<AppBindings> {
 
     let presence: PresenceMember | null = null
     if (kind !== 'public') {
-      const config = this.config
+      const config = await this.resolveConfig()
       if (config === null) {
-        this.subscribeRefused(socket, current.socketId, frame.channel, 'hub_not_initialized')
+        this.subscribeRefused(socket, current.socketId, frame.channel, 'app_not_found')
         return
       }
       const auth = await verifyChannelAuth(
@@ -481,10 +472,34 @@ export class AppHub extends DurableObject<AppBindings> {
     }
   }
 
-  private channelState(channel: string): DurableObjectStub<Channel> {
+  /**
+   * A hibernated object wakes with its fields empty, so the key and secret come
+   * from the Registry instead of from whoever created this instance. A failed
+   * read leaves the field empty, and the next call tries again.
+   */
+  private async resolveConfig(): Promise<AppConfig | null> {
+    if (this.config !== null) return this.config
+
+    const app = await registryStub(this.env).appById(this.appId())
+    if (app === null) {
+      this.log.warn('config_missing')
+      return null
+    }
+
+    this.config = appConfig(app, readSettings(this.env))
+    return this.config
+  }
+
+  private appId(): string {
     const appId = this.ctx.id.name
     if (appId === undefined) throw new Error('AppHub is not addressed by app id')
-    return this.env.CHANNEL.get(this.env.CHANNEL.idFromName(channelObjectName(appId, channel)))
+    return appId
+  }
+
+  private channelState(channel: string): DurableObjectStub<Channel> {
+    return this.env.CHANNEL.get(
+      this.env.CHANNEL.idFromName(channelObjectName(this.appId(), channel)),
+    )
   }
 
   private async recordEvent(channel: string, input: RecordedEvent): Promise<void> {
